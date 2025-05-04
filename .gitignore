@@ -27,6 +27,11 @@ ENV/
 # API keys and sensitive config
 config/api_keys.yaml
 
+# Data, models and reports directories
+data/
+models/
+reports/
+
 # Logs
 logs/
 *.log
