@@ -1,0 +1,5 @@
+exchange: bybit
+futures:
+  taker_fee: 0.00055   # 0.055 %
+  maker_fee: 0.00020   # 0.02  %
+  slippage:  0.00010   # 約定滑り

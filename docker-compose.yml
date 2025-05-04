@@ -1,0 +1,124 @@
+version: '3'
+
+services:
+  # データ取得サービス
+  downloader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./logs:/app/logs
+    command: python src/download.py --all
+    environment:
+      - TZ=Asia/Tokyo
+      - PYTHONUNBUFFERED=1
+    networks:
+      - mlbot-network
+
+  # シグナル生成サービス
+  signal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./models:/app/models
+      - ./signals:/app/signals
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"
+      - "9090:9090"  # Prometheus metrics port
+    command: python src/live_signal.py
+    environment:
+      - TZ=Asia/Tokyo
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - downloader
+    networks:
+      - mlbot-network
+
+  # 注文実行サービス
+  executor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ./config:/app/config
+      - ./signals:/app/signals
+      - ./logs:/app/logs
+    command: python src/execution.py --interval 2h --check-interval 60
+    environment:
+      - TZ=Asia/Tokyo
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - signal
+    networks:
+      - mlbot-network
+
+  # リスク監視サービス
+  risk:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ./config:/app/config
+      - ./reports:/app/reports
+      - ./logs:/app/logs
+    ports:
+      - "9092:9092"  # Prometheus metrics port
+    command: python src/risk.py --interval 60
+    environment:
+      - TZ=Asia/Tokyo
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - executor
+    networks:
+      - mlbot-network
+
+  # Prometheus (メトリクス収集)
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    ports:
+      - "9093:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - mlbot-network
+
+  # Grafana (可視化ダッシュボード)
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./reports:/var/lib/grafana/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - mlbot-network
+
+networks:
+  mlbot-network:
+
+volumes:
+  prometheus_data:
+  grafana_data:
