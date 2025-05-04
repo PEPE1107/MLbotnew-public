@@ -24,6 +24,7 @@ import pyarrow
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import slack_sdk
 from typing import Dict, List, Optional, Union, Any
+from config_loader import CG_API, SLACK_WEBHOOK
 
 # ロギング設定
 logging.basicConfig(
@@ -81,9 +82,7 @@ class CoinglassDownloader:
             str: Coinglass API キー
         """
         try:
-            with open(self.config_dir / 'api_keys.yaml', 'r') as f:
-                config = yaml.safe_load(f)
-            return config['cg_api']
+            return CG_API
         except Exception as e:
             logger.error(f"API キーの読み込みに失敗しました: {e}")
             raise
@@ -109,9 +108,7 @@ class CoinglassDownloader:
             Optional[str]: Slack Webhook URL
         """
         try:
-            with open(self.config_dir / 'api_keys.yaml', 'r') as f:
-                config = yaml.safe_load(f)
-            return config.get('slack_webhook')
+            return SLACK_WEBHOOK
         except Exception as e:
             logger.error(f"Slack Webhook の読み込みに失敗しました: {e}")
             return None

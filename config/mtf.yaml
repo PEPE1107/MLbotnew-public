@@ -1,0 +1,13 @@
+# Multi-TimeFrame フィルター設定
+
+# 日足トレンドフィルターの有効/無効
+use_trend_filter: true
+
+# フィルター設定
+trend_filter:
+  # 日足のどの指標を使用するか
+  indicator: "ema"  # ema, sma
+  # 指標の期間
+  period: 200
+  # 上昇トレンドと判定する条件
+  condition: "price_above"  # price_above, price_below

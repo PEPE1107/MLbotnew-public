@@ -110,6 +110,7 @@ class BacktestRunner:
         self.config_dir = config_dir
         self.intervals = self._load_intervals()
         self.fee_config = self._load_fee_config()
+        self.mtf_config = self._load_mtf_config()
         self.model_dir = MODELS_DIR
         self.report_dir = REPORTS_DIR
         
@@ -144,6 +145,25 @@ class BacktestRunner:
         except Exception as e:
             logger.error(f"手数料設定の読み込みに失敗しました: {e}")
             raise
+    
+    def _load_mtf_config(self) -> Dict:
+        """MTF設定を読み込む
+        
+        Returns:
+            Dict: MTF設定
+        """
+        try:
+            mtf_path = self.config_dir / 'mtf.yaml'
+            if not mtf_path.exists():
+                logger.warning(f"MTF設定ファイルが見つかりません: {mtf_path}")
+                return {"use_trend_filter": False}
+                
+            with open(mtf_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            return config
+        except Exception as e:
+            logger.warning(f"MTF設定の読み込みに失敗しました: {e}")
+            return {"use_trend_filter": False}
     
     def load_data(self, interval: str) -> pd.DataFrame:
         """特徴量を読み込む
@@ -280,6 +300,37 @@ class BacktestRunner:
         # データフレームをコピー
         result = df.copy()
         
+        # 日足トレンドフィルター設定の確認
+        use_trend_filter = self.mtf_config.get('use_trend_filter', False)
+        if use_trend_filter:
+            logger.info("日足トレンドフィルターが有効です")
+            # 日足トレンドデータの読み込み
+            try:
+                trend_path = DATA_DIR / 'features' / '1d' / 'trend_flag.parquet'
+                if not os.path.exists(trend_path):
+                    logger.warning(f"日足トレンドフラグファイルが見つかりません: {trend_path}")
+                    logger.warning("日足トレンドフィルターは使用できません")
+                else:
+                    # トレンドフラグ読み込み
+                    trend_flag = pd.read_parquet(trend_path)
+                    
+                    # インデックスをシグナルデータと合わせる
+                    if hasattr(trend_flag.index, 'tz_localize') and trend_flag.index.tz is None:
+                        trend_flag.index = trend_flag.index.tz_localize('UTC')
+                    
+                    # シグナルのインデックスに合わせてリサンプリング (直前の値を転送)
+                    trend_flag = trend_flag.reindex(result.index, method='ffill')
+                    
+                    # トレンドフラグをデータフレームに追加
+                    result['trend_flag'] = trend_flag
+                    
+                    logger.info(f"日足トレンドフラグ読み込み完了: {len(trend_flag)} レコード")
+                    logger.info(f"上昇トレンド期間: {trend_flag.sum()}/{len(trend_flag)} ({trend_flag.mean()*100:.1f}%)")
+            except Exception as e:
+                logger.error(f"日足トレンドフラグ読み込みエラー: {str(e)}")
+                logger.warning("日足トレンドフィルターは使用できません")
+                use_trend_filter = False
+        
         # 特徴量の抽出と前処理
         features = []
         for col in feature_cols:
@@ -343,13 +394,43 @@ class BacktestRunner:
         result['pred_proba'] = y_pred_proba
         
         # シグナル生成: 閾値以上ならロング、(1-閾値)以下ならショート
-        result['signal'] = np.where(
+        result['raw_signal'] = np.where(
             result['pred_proba'] > threshold, 1,     # ロングシグナル
             np.where(
                 result['pred_proba'] < (1 - threshold), -1,   # ショートシグナル
                 0   # ニュートラル
             )
         )
+        
+        # 日足トレンドフィルターの適用
+        if use_trend_filter and 'trend_flag' in result.columns:
+            logger.info("日足トレンドフィルターを適用します")
+            
+            # 前日のトレンドフラグが1のときのみロングエントリー
+            entries = (result['raw_signal'] == 1) & (result['trend_flag'].shift(1) == 1)
+            
+            # シグナルが-1の場合か、トレンドフラグが0の場合にイグジット
+            exits = (result['raw_signal'] == -1) | (result['trend_flag'].shift(1) == 0)
+            
+            # フィルタリングしたシグナルを作成
+            result['signal'] = np.where(entries, 1, np.where(exits, -1, 0))
+            
+            # フィルタリング前後の統計
+            before_counts = result['raw_signal'].value_counts()
+            after_counts = result['signal'].value_counts()
+            
+            logger.info("フィルタリング前のシグナル:")
+            for signal_value, count in before_counts.items():
+                signal_name = {1: 'ロング', -1: 'ショート', 0: 'ニュートラル'}.get(signal_value, str(signal_value))
+                logger.info(f"  {signal_name}シグナル: {count} ({count/len(result):.2%})")
+                
+            logger.info("フィルタリング後のシグナル:")
+            for signal_value, count in after_counts.items():
+                signal_name = {1: 'ロング', -1: 'ショート', 0: 'ニュートラル'}.get(signal_value, str(signal_value))
+                logger.info(f"  {signal_name}シグナル: {count} ({count/len(result):.2%})")
+        else:
+            # フィルタリングなしの場合はraw_signalをそのまま使用
+            result['signal'] = result['raw_signal']
         
         # 集計
         signal_counts = result['signal'].value_counts()

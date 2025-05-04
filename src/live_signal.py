@@ -120,6 +120,7 @@ class LiveSignalGenerator:
         self.config_dir = config_dir
         self.api_config = self._load_api_config()
         self.intervals = self._load_intervals()
+        self.mtf_config = self._load_mtf_config()
         self.signals_dir = SIGNALS_DIR
         
         # Slackクライアント設定
@@ -160,6 +161,25 @@ class LiveSignalGenerator:
         except Exception as e:
             logger.error(f"時間枠設定の読み込みに失敗しました: {e}")
             raise
+            
+    def _load_mtf_config(self) -> Dict:
+        """MTF設定を読み込む
+        
+        Returns:
+            Dict: MTF設定
+        """
+        try:
+            mtf_path = self.config_dir / 'mtf.yaml'
+            if not mtf_path.exists():
+                logger.warning(f"MTF設定ファイルが見つかりません: {mtf_path}")
+                return {"use_trend_filter": False}
+                
+            with open(mtf_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            return config
+        except Exception as e:
+            logger.warning(f"MTF設定の読み込みに失敗しました: {e}")
+            return {"use_trend_filter": False}
     
     def setup_slack_client(self):
         """Slack Webhook クライアントを設定"""
@@ -418,6 +438,40 @@ class LiveSignalGenerator:
         
         return processed
     
+    def load_trend_flag(self) -> Optional[int]:
+        """日足トレンドフラグを読み込む
+        
+        Returns:
+            Optional[int]: トレンドフラグ (1=上昇トレンド, 0=下降トレンド, None=データなし)
+        """
+        try:
+            # 日足トレンドフィルター設定の確認
+            use_trend_filter = self.mtf_config.get('use_trend_filter', False)
+            
+            if not use_trend_filter:
+                logger.info("日足トレンドフィルターは無効です")
+                return None
+                
+            # トレンドフラグファイルの確認
+            trend_path = DATA_DIR / 'features' / '1d' / 'trend_flag.parquet'
+            if not os.path.exists(trend_path):
+                logger.warning(f"日足トレンドフラグファイルが見つかりません: {trend_path}")
+                return None
+                
+            # トレンドフラグ読み込み
+            trend_flag = pd.read_parquet(trend_path)
+            
+            # 最新のフラグを取得
+            latest_flag = trend_flag.iloc[-1]
+            
+            logger.info(f"最新の日足トレンドフラグ: {int(latest_flag)} ({'上昇' if latest_flag else '下降'}トレンド)")
+            
+            return int(latest_flag)
+            
+        except Exception as e:
+            logger.error(f"日足トレンドフラグ読み込みエラー: {str(e)}")
+            return None
+    
     def predict(self, df: pd.DataFrame, model: Any, feature_cols: List[str], 
                threshold: float = 0.55) -> Dict:
         """モデルで予測
@@ -464,12 +518,24 @@ class LiveSignalGenerator:
         else:
             raise TypeError(f"サポートされていないモデル種類です: {type(model)}")
         
+        # 日足トレンドフラグの取得
+        trend_flag = self.load_trend_flag()
+        
         # 位置サイズ計算: 閾値以上ならロング、(1-閾値)以下ならショート
         if prediction > threshold:
             # ロングシグナル: 0〜1
             confidence = min(1.0, (prediction - threshold) / (1 - threshold) * 2)
-            position = confidence
-            signal_type = 'long'
+            
+            # 日足トレンドフラグで判断上書き（下降トレンドではロングを無効化）
+            if trend_flag is not None and trend_flag == 0:
+                logger.info("下降トレンドのためロングシグナルを無効化")
+                confidence = 0
+                position = 0
+                signal_type = 'neutral_trend_filter'
+            else:
+                position = confidence
+                signal_type = 'long'
+                
         elif prediction < (1 - threshold):
             # ショートシグナル: -1〜0
             confidence = min(1.0, ((1 - threshold) - prediction) / (1 - threshold) * 2)
