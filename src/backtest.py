@@ -418,10 +418,10 @@ class BacktestRunner:
             logger.info("日足トレンドフィルターを適用します")
             
             # 前日のトレンドフラグが1のときのみロングエントリー
-            entries = (result['raw_signal'] == 1) & (result['trend_flag'].shift(1) == 1)
+            entries = (result['raw_signal'] == 1) & (result['trend_flag'] == 1)
             
             # シグナルが-1の場合か、トレンドフラグが0の場合にイグジット
-            exits = (result['raw_signal'] == -1) | (result['trend_flag'].shift(1) == 0)
+            exits = (result['raw_signal'] == -1) | (result['trend_flag'] == 0)
             
             # フィルタリングしたシグナルを作成
             result['signal'] = np.where(entries, 1, np.where(exits, -1, 0))
@@ -495,14 +495,13 @@ class BacktestRunner:
             
             # バックテスト実行
             pf = vbt.Portfolio.from_signals(
-                price,
-                entries,
+                price, 
+                entries, 
                 exits,
-                fees=total_fee,
-                slippage=0.0,   # 既にスリッページを含んでいるので重複させない
-                init_cash=100_000,
-                freq='infer'
-            )
+                upon_op="Next",           # ← 必須
+                fees=0.00055,             # taker
+                slippage=0.0001,
+                init_cash=100_000)
             
             # パフォーマンス統計
             stats = pf.stats()
@@ -584,262 +583,18 @@ class BacktestRunner:
                 'Total Return [%]': total_return * 100,
                 'Annual Return [%]': annual_return * 100,
                 'Sharpe Ratio': sharpe,
-                'Max Drawdown [%]': max_drawdown,
-                'CAGR [%]': ((1 + total_return) ** (252 / len(df_backtest)) - 1) * 100,
+                'Max Drawdown [%]': max_drawdown
             })
             
             # キーメトリクスをログ出力
-            logger.info(f"総リターン: {stats['Total Return [%]']:.2f}%")
-            logger.info(f"年間リターン: {stats['Annual Return [%]']:.2f}%")
-            logger.info(f"Sharpe比率: {stats['Sharpe Ratio']:.2f}")
-            logger.info(f"CAGR: {stats['CAGR [%]']:.2f}%")
-            logger.info(f"最大ドローダウン: {stats['Max Drawdown [%]']:.2f}%")
+            logger.info(f"総リターン: {stats['Total Return [%]']}%")
+            logger.info(f"年間リターン: {stats['Annual Return [%]']}%")
+            logger.info(f"Sharpe比率: {stats['Sharpe Ratio']}")
+            logger.info(f"最大ドローダウン: {stats['Max Drawdown [%]']}%")
             
-            # MAR比率 (CAGR / MaxDD)
-            cagr = stats['CAGR [%]'] / 100
-            max_dd = abs(stats['Max Drawdown [%]']) / 100
-            mar_ratio = abs(cagr / max_dd) if max_dd != 0 else float('inf')
-            stats['MAR Ratio'] = mar_ratio
-            logger.info(f"MAR比率 (CAGR/MaxDD): {mar_ratio:.4f}")
+            # SimplePortfolioオブジェクトを返す
+            portfolio = SimplePortfolio(df_backtest, stats)
+            return portfolio, stats
             
-            # 合格基準の確認
-            meets_criteria = (
-                stats['Sharpe Ratio'] > 1.0 and
-                mar_ratio >= 0.5 and
-                stats['Max Drawdown [%]'] > -25.0
-            )
-            stats['Meets Criteria'] = meets_criteria
-            
-            logger.info(f"合格基準を満たしている: {meets_criteria}")
-            logger.info(f"- Sharpe > 1: {'✓' if stats['Sharpe Ratio'] > 1.0 else '✗'} ({stats['Sharpe Ratio']:.2f})")
-            logger.info(f"- MAR ≥ 0.5: {'✓' if mar_ratio >= 0.5 else '✗'} ({mar_ratio:.2f})")
-            logger.info(f"- MaxDD < 25%: {'✓' if stats['Max Drawdown [%]'] > -25.0 else '✗'} ({stats['Max Drawdown [%]']:.2f}%)")
-            
-            # SimplePortfolioインスタンスを作成
-            pf = SimplePortfolio(df_backtest, stats)
-            
-            return pf, stats
-    
-    def save_backtest_results(self, interval: str, portfolio: Any, stats: pd.Series, 
-                             df: pd.DataFrame, model_type: str) -> Dict:
-        """バックテスト結果を保存
-        
-        Args:
-            interval: 時間枠
-            portfolio: バックテストのポートフォリオオブジェクト
-            stats: 統計指標
-            df: シグナル付きデータフレーム
-            model_type: モデル種類
-            
-        Returns:
-            Dict: 保存先情報
-        """
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_dir = self.report_dir / interval / model_type / 'backtest' / timestamp
-        
-        # ディレクトリ作成
-        os.makedirs(report_dir, exist_ok=True)
-        
-        logger.info(f"バックテスト結果を保存: {report_dir}")
-        
-        # 統計を JSON 形式で保存
-        stats_dict = stats.to_dict()
-        
-        # MAR比率の追加
-        cagr = stats['CAGR [%]'] / 100  # パーセントから小数に変換
-        max_dd = stats['Max Drawdown [%]'] / 100  # パーセントから小数に変換
-        mar_ratio = abs(cagr / max_dd) if max_dd != 0 else float('inf')
-        stats_dict['MAR Ratio'] = mar_ratio
-        
-        # 合格基準の追加
-        stats_dict['Meets Criteria'] = (
-            stats['Sharpe Ratio'] > 1.0 and
-            mar_ratio >= 0.5 and
-            stats['Max Drawdown [%]'] < 25.0
-        )
-        
-        with open(report_dir / 'stats.json', 'w', encoding='utf-8') as f:
-            json.dump(stats_dict, f, indent=2, default=str)
-        
-        # ポートフォリオを保存
-        portfolio.save(report_dir / 'portfolio.pkl')
-        
-        # シグナルと価格データを保存
-        signals_df = df[['price_close', 'pred_proba', 'signal']].copy()
-        signals_df.to_parquet(report_dir / 'signals.parquet')
-        
-        # チャートを生成
-        self._plot_backtest_results(portfolio, signals_df, report_dir)
-        
-        return {
-            'report_dir': str(report_dir),
-            'stats_file': str(report_dir / 'stats.json'),
-            'portfolio_file': str(report_dir / 'portfolio.pkl'),
-            'signals_file': str(report_dir / 'signals.parquet'),
-            'timestamp': timestamp
-        }
-    
-    def _plot_backtest_results(self, portfolio: Any, signals_df: pd.DataFrame, 
-                              report_dir: Path) -> None:
-        """バックテスト結果をプロット
-        
-        Args:
-            portfolio: バックテストのポートフォリオオブジェクト
-            signals_df: シグナルデータフレーム
-            report_dir: 結果保存ディレクトリ
-        """
-        # リターンチャート
-        plt.figure(figsize=(12, 6))
-        portfolio.plot()
-        plt.title('Cumulative Returns')
-        plt.tight_layout()
-        plt.savefig(report_dir / 'returns.png')
-        plt.close()
-        
-        # ドローダウンチャート
-        plt.figure(figsize=(12, 6))
-        portfolio.plot_drawdowns()
-        plt.title('Drawdowns')
-        plt.tight_layout()
-        plt.savefig(report_dir / 'drawdowns.png')
-        plt.close()
-        
-        # 価格とシグナル
-        plt.figure(figsize=(12, 8))
-        
-        # 上のサブプロット: 価格
-        ax1 = plt.subplot(2, 1, 1)
-        ax1.plot(signals_df.index, signals_df['price_close'], label='Price')
-        
-        # エントリーポイントのマーク
-        long_entries = signals_df[signals_df['signal'] == 1]
-        short_entries = signals_df[signals_df['signal'] == -1]
-        
-        ax1.scatter(long_entries.index, long_entries['price_close'], 
-                   marker='^', color='green', s=50, label='Long')
-        ax1.scatter(short_entries.index, short_entries['price_close'], 
-                   marker='v', color='red', s=50, label='Short')
-        
-        ax1.set_title('Price and Signals')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-        
-        # 下のサブプロット: 予測確率
-        ax2 = plt.subplot(2, 1, 2, sharex=ax1)
-        ax2.plot(signals_df.index, signals_df['pred_proba'], label='Prediction Probability')
-        ax2.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5)
-        
-        # シグナル閾値のライン
-        threshold = 0.55  # デフォルト閾値
-        ax2.axhline(y=threshold, color='green', linestyle='--', alpha=0.5, label=f'Long Threshold ({threshold})')
-        ax2.axhline(y=1-threshold, color='red', linestyle='--', alpha=0.5, label=f'Short Threshold ({1-threshold})')
-        
-        ax2.set_title('Prediction Probability')
-        ax2.set_ylim(0, 1)
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        plt.savefig(report_dir / 'signals.png')
-        plt.close()
-    
-    def run_all_backtests(self, model_type: str = 'lightgbm', threshold: float = 0.55,
-                         model_date: Optional[str] = None) -> Dict:
-        """すべての時間枠でバックテストを実行
-        
-        Args:
-            model_type: モデル種類 ('lightgbm' または 'catboost')
-            threshold: シグナル閾値
-            model_date: モデル日付 (省略時は最新)
-            
-        Returns:
-            Dict: バックテスト結果
-        """
-        results = {}
-        
-        for interval in self.intervals:
-            try:
-                logger.info(f"時間枠 {interval} のバックテスト開始")
-                
-                # データ読み込み
-                df = self.load_data(interval)
-                
-                # モデル読み込み
-                model, feature_cols = self.load_model(interval, model_type, model_date)
-                
-                # シグナル生成
-                df_with_signals = self.generate_signals(df, model, feature_cols, threshold)
-                
-                # バックテスト実行
-                portfolio, stats = self.run_backtest(df_with_signals)
-                
-                # 結果保存
-                save_info = self.save_backtest_results(interval, portfolio, stats, df_with_signals, model_type)
-                
-                results[interval] = {
-                    'portfolio': portfolio,
-                    'stats': stats.to_dict(),
-                    'save_info': save_info
-                }
-                
-                logger.info(f"時間枠 {interval} のバックテスト完了")
-                
-            except Exception as e:
-                logger.error(f"時間枠 {interval} のバックテスト中にエラー: {str(e)}")
-                continue
-        
-        return results
-
-def parse_args():
-    """コマンドライン引数を解析"""
-    parser = argparse.ArgumentParser(description='バックテスト実行')
-    parser.add_argument('--interval', type=str, help='時間枠 (例: 15m, 2h)')
-    parser.add_argument('--model_type', type=str, default='lightgbm', 
-                       choices=['lightgbm', 'catboost'], help='モデル種類')
-    parser.add_argument('--threshold', type=float, default=0.55, help='シグナル閾値')
-    parser.add_argument('--model_date', type=str, help='モデル日付 (例: 20250503)')
-    parser.add_argument('--all', action='store_true', help='すべての時間枠でバックテスト')
-    return parser.parse_args()
-
-def main():
-    """メイン関数"""
-    try:
-        # ログディレクトリ作成
-        os.makedirs(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs'), exist_ok=True)
-        
-        args = parse_args()
-        
-        # vectorbtpro チェック
-        if not VBT_AVAILABLE:
-            logger.warning("vectorbtpro がインストールされていません。シンプルなバックテスト実装を使用します。")
-        
-        runner = BacktestRunner()
-        
-        if args.all:
-            # すべての時間枠でバックテスト
-            results = runner.run_all_backtests(args.model_type, args.threshold, args.model_date)
-        elif args.interval:
-            # 単一時間枠でバックテスト
-            df = runner.load_data(args.interval)
-            model, feature_cols = runner.load_model(args.interval, args.model_type, args.model_date)
-            df_with_signals = runner.generate_signals(df, model, feature_cols, args.threshold)
-            portfolio, stats = runner.run_backtest(df_with_signals)
-            runner.save_backtest_results(args.interval, portfolio, stats, df_with_signals, args.model_type)
-        else:
-            # デフォルトでは最初の時間枠を使用
-            interval = runner.intervals[0]
-            logger.info(f"時間枠が指定されていないため、デフォルト値 {interval} を使用します")
-            df = runner.load_data(interval)
-            model, feature_cols = runner.load_model(interval, args.model_type, args.model_date)
-            df_with_signals = runner.generate_signals(df, model, feature_cols, args.threshold)
-            portfolio, stats = runner.run_backtest(df_with_signals)
-            runner.save_backtest_results(interval, portfolio, stats, df_with_signals, args.model_type)
-        
-        return 0
-    
-    except Exception as e:
-        logger.error(f"実行エラー: {str(e)}", exc_info=True)
-        return 1
-
-if __name__ == "__main__":
-    sys.exit(main())
+    def run_interval_backtest(self, interval: str, model_type: str = 'lightgbm',
+                            model_date: Optional[str] = None, threshold: float = 0.55) -> Tuple[
