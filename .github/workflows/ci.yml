@@ -1,0 +1,36 @@
+name: test-and-bt
+on: [push, pull_request]
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-python@v5
+        with: 
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run unit tests
+        run: pytest -q
+  backtest:
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-python@v5
+        with: 
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run backtests
+        run: |
+          python scripts/run_backtest.py --interval 15m
+          python scripts/run_backtest.py --interval 2h
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stats
+          path: reports/*/stats.json
