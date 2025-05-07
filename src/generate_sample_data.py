@@ -29,7 +29,7 @@ ROOT_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATA_DIR = ROOT_DIR / 'data'
 
 # サンプルデータ生成用定数
-INTERVALS = ["15m", "2h"]
+INTERVALS = ["15m", "2h", "1d"]
 ENDPOINTS = [
     'price', 'oi', 'funding', 'liq', 'lsr', 'taker', 'orderbook', 'premium'
 ]
@@ -59,6 +59,9 @@ def generate_timestamps(interval, num_samples):
     elif interval == "2h":
         for i in range(num_samples):
             timestamps.append(end_time - timedelta(hours=2 * i))
+    elif interval == "1d":
+        for i in range(num_samples):
+            timestamps.append(end_time - timedelta(days=1 * i))
     
     return sorted(timestamps)
 
