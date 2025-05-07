@@ -553,8 +553,8 @@ class BacktestRunner:
             # リターン計算
             df_backtest['returns'] = df_backtest['price'].pct_change()
             
-            # 戦略リターン計算
-            df_backtest['strategy_returns'] = df_backtest['position'].shift(1) * df_backtest['returns']
+            # 戦略リターン計算（次の期間のリターンに基づく）
+            df_backtest['strategy_returns'] = df_backtest['position'] * df_backtest['returns'].shift(-1)
             
             # 手数料を考慮
             df_backtest['position_change'] = df_backtest['position'].diff().fillna(0)

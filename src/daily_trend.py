@@ -59,7 +59,7 @@ def daily_filter():
         ema200 = df[close_col].ewm(span=200).mean()
         
         # トレンドフラグ生成 (1=上昇, 0=下降)
-        trend = (df[close_col] > ema200).astype(int)
+        trend = (df[close_col] > ema200).astype(int).shift(1)  # ←１日ラグ
         
         # 時間インデックスのローカライズを解除（Noneと置換）
         if hasattr(trend.index, 'tz_localize'):
