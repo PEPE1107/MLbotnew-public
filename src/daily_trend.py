@@ -71,7 +71,9 @@ def daily_filter():
         
         # 保存
         output_path = output_dir / 'trend_flag.parquet'
-        trend.to_parquet(output_path)
+        # Series を DataFrame に変換
+        trend_df = pd.DataFrame({'trend_flag': trend})
+        trend_df.to_parquet(output_path)
         
         logger.info(f"トレンドフラグを生成しました: {output_path}, レコード数: {len(trend)}")
         logger.info(f"上昇トレンド期間: {trend.sum()}/{len(trend)} ({trend.mean()*100:.1f}%)")

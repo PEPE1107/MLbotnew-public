@@ -314,9 +314,17 @@ class BacktestRunner:
                     # トレンドフラグ読み込み
                     trend_flag = pd.read_parquet(trend_path)
                     
-                    # インデックスをシグナルデータと合わせる
-                    if hasattr(trend_flag.index, 'tz_localize') and trend_flag.index.tz is None:
-                        trend_flag.index = trend_flag.index.tz_localize('UTC')
+                    # インデックスのタイムゾーンを合わせる
+                    # まず両方のデータフレームのタイムゾーン情報をログ
+                    logger.info(f"シグナルインデックスのタイムゾーン: {getattr(result.index, 'tz', None)}")
+                    logger.info(f"トレンドフラグインデックスのタイムゾーン: {getattr(trend_flag.index, 'tz', None)}")
+                    
+                    # 両方ともタイムゾーンを削除する方法で統一
+                    if hasattr(result.index, 'tz_localize') and result.index.tz is not None:
+                        result.index = result.index.tz_localize(None)
+                    
+                    if hasattr(trend_flag.index, 'tz_localize') and trend_flag.index.tz is not None:
+                        trend_flag.index = trend_flag.index.tz_localize(None)
                     
                     # シグナルのインデックスに合わせてリサンプリング (直前の値を転送)
                     trend_flag = trend_flag.reindex(result.index, method='ffill')
@@ -325,7 +333,10 @@ class BacktestRunner:
                     result['trend_flag'] = trend_flag
                     
                     logger.info(f"日足トレンドフラグ読み込み完了: {len(trend_flag)} レコード")
-                    logger.info(f"上昇トレンド期間: {trend_flag.sum()}/{len(trend_flag)} ({trend_flag.mean()*100:.1f}%)")
+                    sum_value = trend_flag['trend_flag'].sum()
+                    len_value = len(trend_flag)
+                    mean_pct = (sum_value / len_value) * 100 if len_value > 0 else 0
+                    logger.info(f"上昇トレンド期間: {sum_value}/{len_value} ({mean_pct:.1f}%)")
             except Exception as e:
                 logger.error(f"日足トレンドフラグ読み込みエラー: {str(e)}")
                 logger.warning("日足トレンドフィルターは使用できません")
