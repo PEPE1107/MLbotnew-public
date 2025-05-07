@@ -265,9 +265,14 @@ class BacktestRunner:
             feature_cols = self.load_data(interval).columns.tolist()
             feature_cols = [col for col in feature_cols if col.endswith('_zscore')]
         else:
-            # モデル情報から特徴量リストを取得
-            with open(model_info_file, 'r', encoding='utf-8') as f:
-                model_info = json.load(f)
+            try:
+                # モデル情報から特徴量リストを取得
+                with open(model_info_file, 'r', encoding='utf-8') as f:
+                    model_info = json.load(f)
+            except UnicodeDecodeError:
+                # バイナリモードで再試行
+                with open(model_info_file, 'rb') as f:
+                    model_info = json.loads(f.read().decode('utf-8-sig'))
             feature_cols = model_info.get('feature_cols', [])
         
         # モデル読み込み
@@ -597,4 +602,143 @@ class BacktestRunner:
             return portfolio, stats
             
     def run_interval_backtest(self, interval: str, model_type: str = 'lightgbm',
-                            model_date: Optional[str] = None, threshold: float = 0.55) -> Tuple[
+                            model_date: Optional[str] = None, threshold: float = 0.55) -> Tuple[Any, pd.DataFrame]:
+        """指定された時間枠のデータに対してバックテストを実行する
+        
+        Args:
+            interval: 時間枠
+            model_type: モデル種類
+            model_date: モデル日付 (省略時は最新)
+            threshold: シグナル閾値
+            
+        Returns:
+            Tuple[Any, pd.DataFrame]: バックテスト結果
+        """
+        logger.info(f"時間枠 {interval} のバックテスト開始")
+        
+        # データ読み込み
+        df = self.load_data(interval)
+        
+        # モデル読み込み
+        model, feature_cols = self.load_model(interval, model_type, model_date)
+        
+        # シグナル生成
+        signals_df = self.generate_signals(df, model, feature_cols, threshold)
+        
+        # バックテスト実行
+        portfolio, stats = self.run_backtest(signals_df)
+        
+        # レポートディレクトリにポートフォリオを保存
+        report_dir = self.report_dir / interval
+        os.makedirs(report_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        portfolio_file = report_dir / f"backtest_portfolio_{timestamp}.pkl"
+        
+        if hasattr(portfolio, 'save'):
+            portfolio.save(portfolio_file)
+            logger.info(f"ポートフォリオ保存: {portfolio_file}")
+        
+        return portfolio, stats
+        
+    def run_all_intervals(self, model_type: str = 'lightgbm', 
+                          model_date: Optional[str] = None, 
+                          threshold: float = 0.55) -> Dict[str, Any]:
+        """すべての時間枠に対してバックテストを実行
+        
+        Args:
+            model_type: モデル種類
+            model_date: モデル日付 (省略時は最新)
+            threshold: シグナル閾値
+            
+        Returns:
+            Dict[str, Any]: 各時間枠のバックテスト結果
+        """
+        results = {}
+        
+        for interval in self.intervals:
+            try:
+                logger.info(f"=== 時間枠 {interval} のバックテスト開始 ===")
+                portfolio, stats = self.run_interval_backtest(
+                    interval, model_type, model_date, threshold
+                )
+                results[interval] = {
+                    'portfolio': portfolio,
+                    'stats': stats
+                }
+                logger.info(f"=== 時間枠 {interval} のバックテスト完了 ===")
+            except Exception as e:
+                logger.error(f"時間枠 {interval} のバックテスト失敗: {e}")
+                logger.exception(e)
+        
+        return results
+
+
+def main():
+    """コマンドライン実行用のメイン関数"""
+    parser = argparse.ArgumentParser(description='バックテスト実行ツール')
+    parser.add_argument('--interval', '-i', type=str, help='時間枠 (省略時は全時間枠)')
+    parser.add_argument('--model-type', '-m', type=str, default='lightgbm',
+                        choices=['lightgbm', 'catboost'], help='モデル種類')
+    parser.add_argument('--model-date', '-d', type=str, help='モデル日付 (省略時は最新)')
+    parser.add_argument('--threshold', '-t', type=float, default=0.55,
+                        help='シグナル閾値 (0.5 〜 1.0)')
+    parser.add_argument('--trend-filter', '-f', action='store_true',
+                        help='日足トレンドフィルター適用 (MTF)')
+    args = parser.parse_args()
+    
+    # BacktestRunner インスタンス作成
+    runner = BacktestRunner()
+    
+    # トレンドフィルター設定
+    mtf_config = {"use_trend_filter": args.trend_filter}
+    runner.mtf_config = mtf_config
+    
+    # シグナル閾値のバリデーション
+    if not 0.5 <= args.threshold <= 1.0:
+        logger.warning(f"シグナル閾値が範囲外です: {args.threshold}、0.55 を使用します")
+        threshold = 0.55
+    else:
+        threshold = args.threshold
+    
+    # バックテスト実行
+    if args.interval:
+        # 単一時間枠のバックテスト
+        logger.info(f"時間枠 {args.interval} のバックテスト開始")
+        try:
+            portfolio, stats = runner.run_interval_backtest(
+                args.interval, args.model_type, args.model_date, threshold
+            )
+            
+            # 結果表示
+            logger.info(f"バックテスト結果 ({args.interval}):")
+            for key, value in stats.items():
+                logger.info(f"  {key}: {value}")
+                
+        except Exception as e:
+            logger.error(f"バックテスト失敗: {e}")
+            logger.exception(e)
+            return 1
+    else:
+        # 全時間枠のバックテスト
+        logger.info("全時間枠のバックテスト開始")
+        try:
+            results = runner.run_all_intervals(args.model_type, args.model_date, threshold)
+            
+            # 結果表示
+            for interval, result in results.items():
+                if result and 'stats' in result:
+                    logger.info(f"バックテスト結果 ({interval}):")
+                    for key, value in result['stats'].items():
+                        logger.info(f"  {key}: {value}")
+        except Exception as e:
+            logger.error(f"バックテスト失敗: {e}")
+            logger.exception(e)
+            return 1
+    
+    logger.info("バックテスト完了")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
