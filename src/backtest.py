@@ -272,7 +272,20 @@ class BacktestRunner:
             except UnicodeDecodeError:
                 # バイナリモードで再試行
                 with open(model_info_file, 'rb') as f:
-                    model_info = json.loads(f.read().decode('utf-8-sig'))
+                    # まずヘッダーを確認してBOM（バイト順マーク）を処理
+                    raw_data = f.read()
+                    # 様々なエンコーディングを試行
+                    for encoding in ['utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be']:
+                        try:
+                            model_info = json.loads(raw_data.decode(encoding))
+                            logger.info(f"エンコーディング {encoding} でJSONを正常に読み込みました")
+                            break
+                        except Exception:
+                            continue
+                    else:
+                        # どのエンコーディングでも失敗した場合はデフォルト値を使用
+                        logger.warning(f"モデル情報ファイル {model_info_file} の読み込みに失敗しました。デフォルト値を使用します。")
+                        model_info = {"feature_cols": [col for col in self.load_data(interval).columns if col.endswith('_zscore')]}
             feature_cols = model_info.get('feature_cols', [])
         
         # モデル読み込み
@@ -356,7 +369,15 @@ class BacktestRunner:
                 logger.warning(f"特徴量 {col} がデータフレームに見つかりません")
         
         if not features:
-            raise ValueError("有効な特徴量がデータフレームに見つかりません")
+            # 特徴量が見つからない場合は、データフレームから_zscoreで終わるカラムを自動選択
+            logger.warning("指定された特徴量が見つかりませんでした。データフレームから_zscoreで終わるカラムを自動選択します")
+            zscore_cols = [col for col in result.columns if col.endswith('_zscore')]
+            
+            if not zscore_cols:
+                raise ValueError("有効な特徴量がデータフレームに見つかりません")
+            
+            logger.info(f"自動選択した特徴量: {len(zscore_cols)} 個")
+            features = zscore_cols
         
         # 特徴量マトリックスの作成
         X = result[features].values
