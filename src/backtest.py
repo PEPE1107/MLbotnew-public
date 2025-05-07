@@ -663,11 +663,35 @@ class BacktestRunner:
         os.makedirs(report_dir, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        portfolio_file = report_dir / f"backtest_portfolio_{timestamp}.pkl"
+        result_dir = report_dir / timestamp
+        os.makedirs(result_dir, exist_ok=True)
+        
+        portfolio_file = result_dir / "backtest_portfolio.pkl"
         
         if hasattr(portfolio, 'save'):
             portfolio.save(portfolio_file)
             logger.info(f"ポートフォリオ保存: {portfolio_file}")
+            
+        # 統計情報をJSONとして保存
+        stats_file = result_dir / "stats.json"
+        with open(stats_file, 'w', encoding='utf-8') as f:
+            json.dump(stats.to_dict(), f, indent=2)
+        logger.info(f"統計情報を保存: {stats_file}")
+        
+        # グラフを保存
+        if hasattr(portfolio, 'plot'):
+            returns_plot = portfolio.plot()
+            returns_file = result_dir / "returns.png"
+            returns_plot.savefig(returns_file)
+            logger.info(f"リターングラフを保存: {returns_file}")
+            plt.close()
+            
+        if hasattr(portfolio, 'plot_drawdowns'):
+            drawdowns_plot = portfolio.plot_drawdowns()
+            drawdowns_file = result_dir / "drawdowns.png"
+            drawdowns_plot.savefig(drawdowns_file)
+            logger.info(f"ドローダウングラフを保存: {drawdowns_file}")
+            plt.close()
         
         return portfolio, stats
         
