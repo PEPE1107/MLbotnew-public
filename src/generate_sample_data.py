@@ -19,7 +19,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import logging
 import argparse
-from config_loader import USE_REAL_DATA, MAX_SAMPLES
+import yaml
+
+# デフォルト設定値
+USE_REAL_DATA = False
+MAX_SAMPLES = 4320
 
 # ロギング設定
 logging.basicConfig(
