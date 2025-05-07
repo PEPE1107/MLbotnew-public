@@ -59,11 +59,11 @@ def daily_filter():
         ema200 = df[close_col].ewm(span=200).mean()
         
         # トレンドフラグ生成 (1=上昇, 0=下降)
-        trend = (df[close_col] > ema200).astype(int).shift(1)  # ←１日ラグ
+        trend_flag = ((df[close_col] > ema200).astype(int)).shift(1)
         
         # 時間インデックスのローカライズを解除（Noneと置換）
-        if hasattr(trend.index, 'tz_localize'):
-            trend.index = trend.index.tz_localize(None)
+        if hasattr(trend_flag.index, 'tz_localize'):
+            trend_flag.index = trend_flag.index.tz_localize(None)
         
         # 出力ディレクトリ確認・作成
         output_dir = DATA_DIR / 'features' / '1d'
@@ -72,13 +72,13 @@ def daily_filter():
         # 保存
         output_path = output_dir / 'trend_flag.parquet'
         # Series を DataFrame に変換
-        trend_df = pd.DataFrame({'trend_flag': trend})
+        trend_df = pd.DataFrame({'trend_flag': trend_flag})
         trend_df.to_parquet(output_path)
         
-        logger.info(f"トレンドフラグを生成しました: {output_path}, レコード数: {len(trend)}")
-        logger.info(f"上昇トレンド期間: {trend.sum()}/{len(trend)} ({trend.mean()*100:.1f}%)")
+        logger.info(f"トレンドフラグを生成しました: {output_path}, レコード数: {len(trend_flag)}")
+        logger.info(f"上昇トレンド期間: {trend_flag.sum()}/{len(trend_flag)} ({trend_flag.mean()*100:.1f}%)")
         
-        return trend
+        return trend_flag
         
     except Exception as e:
         logger.error(f"トレンドフラグ生成エラー: {str(e)}", exc_info=True)

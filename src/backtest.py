@@ -519,14 +519,23 @@ class BacktestRunner:
             entries = signal == 1    # ロングエントリー
             exits = signal == -1     # ショートエントリー = ロングイグジット
             
+            # シグナルからエントリー・イグジットを生成
+            entries = signal == 1    # ロングエントリー
+            exits = signal == -1     # ショートエントリー = ロングイグジット
+            
+            # 日足トレンドフィルターの適用
+            trend = pd.read_parquet("data/features/1d/trend_flag.parquet").reindex(signal.index, method="ffill")
+            entries = (signal == 1) & (trend == 1)
+            exits = (signal == -1) | (trend == 0)
+            
             # バックテスト実行
             pf = vbt.Portfolio.from_signals(
                 price, 
                 entries, 
                 exits,
-                upon_op="Next",           # ← 必須
-                fees=0.00055,             # taker
-                slippage=0.0001,
+                upon_op="Next",           # シグナルの"次バー"で約定
+                fees=0.00055,             # taker手数料
+                slippage=0.0001,          # ミニ滑り
                 init_cash=100_000)
             
             # パフォーマンス統計
