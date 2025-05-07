@@ -1,0 +1,12 @@
+# System-wide configuration settings
+
+# Data source configuration
+data:
+  # Whether to use real API data (true) or sample/fake data (false)
+  use_real_data: true
+  
+  # Maximum number of samples per interval to keep
+  max_samples_per_interval: 4320
+  
+  # Logging level for data operations
+  log_level: INFO

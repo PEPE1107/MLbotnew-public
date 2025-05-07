@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 """
-generate_sample_data.py - Coinglassデータの代替サンプルデータ生成スクリプト
+generate_sample_data.py - Coinglass繝・・繧ｿ縺ｮ莉｣譖ｿ繧ｵ繝ｳ繝励Ν繝・・繧ｿ逕滓・繧ｹ繧ｯ繝ｪ繝励ヨ
 
-機能:
-- 各エンドポイント (price, oi, funding, liq, lsr, taker, orderbook, premium) の模擬データ生成
-- 指定された時間枠 (15m, 2h) 向けのデータ生成
-- parquet形式でデータ保存
+讖溯・:
+- 蜷・お繝ｳ繝峨・繧､繝ｳ繝・(price, oi, funding, liq, lsr, taker, orderbook, premium) 縺ｮ讓｡謫ｬ繝・・繧ｿ逕滓・
+- 謖・ｮ壹＆繧後◆譎る俣譫 (15m, 2h) 蜷代￠縺ｮ繝・・繧ｿ逕滓・
+- parquet蠖｢蠑上〒繝・・繧ｿ菫晏ｭ・
+
+注意: このスクリプトはテストやデバッグ目的でのみ使用してください
+      実際のトレーディングやモデル学習には実データを使用することを推奨します
 """
 
 import os
@@ -15,6 +18,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 import logging
+import argparse
+from config_loader import USE_REAL_DATA, MAX_SAMPLES
 
 # ロギング設定
 logging.basicConfig(
@@ -331,8 +336,39 @@ def generate_and_save_all_data():
         
         logger.info(f"インターバル {interval} のデータ生成完了")
 
+def parse_args():
+    """コマンドライン引数を解析"""
+    parser = argparse.ArgumentParser(description='サンプルデータ生成ツール')
+    parser.add_argument('--force', action='store_true', 
+                       help='システム設定を無視して強制的にサンプルデータを生成')
+    return parser.parse_args()
+
 def main():
     """メイン関数"""
+    args = parse_args()
+    
+    if USE_REAL_DATA and not args.force:
+        logger.error("""
+        ======================================================================
+        エラー: システム設定で実データの使用が指定されています
+        
+        サンプルデータを生成するには以下のいずれかを実行してください:
+        
+        1. config/system.yamlの設定を変更:
+           use_real_data: false
+           
+        2. --force オプションを付けて実行:
+           python src/generate_sample_data.py --force
+        
+        警告: サンプルデータはテスト目的専用です。
+              本番環境や実際のトレーディングには使用しないでください。
+        ======================================================================
+        """)
+        return 1
+    
+    if args.force:
+        logger.warning("--force オプションが指定されました。システム設定を無視してサンプルデータを生成します。")
+    
     logger.info("サンプルデータ生成開始")
     generate_and_save_all_data()
     logger.info("サンプルデータ生成完了")

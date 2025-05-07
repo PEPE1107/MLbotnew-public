@@ -24,7 +24,7 @@ import pyarrow
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import slack_sdk
 from typing import Dict, List, Optional, Union, Any
-from config_loader import CG_API, SLACK_WEBHOOK
+from config_loader import CG_API, SLACK_WEBHOOK, USE_REAL_DATA, MAX_SAMPLES
 
 # ロギング設定
 logging.basicConfig(
@@ -330,34 +330,101 @@ def parse_args():
     parser.add_argument('--limit', type=int, default=4320, help='取得するバー数')
     return parser.parse_args()
 
+def parse_advanced_args():
+    """拡張コマンドライン引数を解析"""
+    parser = argparse.ArgumentParser(description='Coinglass データダウンローダー')
+    parser.add_argument('--interval', type=str, help='時間枠 (例: 15m, 2h)')
+    parser.add_argument('--start', type=str, help='開始時刻 (YYYY-MM-DD HH:MM:SS)')
+    parser.add_argument('--end', type=str, help='終了時刻 (YYYY-MM-DD HH:MM:SS)')
+    parser.add_argument('--limit', type=int, default=MAX_SAMPLES, help='取得するバー数')
+    parser.add_argument('--allow-sample', action='store_true', 
+                        help='API接続エラー時にサンプルデータの使用を許可')
+    return parser.parse_args()
+
 def main():
     """メイン関数"""
     try:
         # ログディレクトリ作成
         os.makedirs(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs'), exist_ok=True)
         
-        args = parse_args()
-        downloader = CoinglassDownloader()
-        
-        if args.interval:
-            # 単一時間枠の処理
-            start_time = None
-            end_time = None
+        # 実データを使用するか確認
+        if not USE_REAL_DATA:
+            logger.warning("""
+            =====================================================================
+            警告: システム設定でサンプルデータの使用が指定されています。
+            config/system.yamlの設定を変更してください:
             
-            if args.start:
-                start_time = datetime.strptime(args.start, '%Y-%m-%d %H:%M:%S')
-            if args.end:
-                end_time = datetime.strptime(args.end, '%Y-%m-%d %H:%M:%S')
+            data:
+              use_real_data: true
+              
+            実データを使用せずサンプルデータでのみ処理を続行します。
+            =====================================================================
+            """)
+            
+            # サンプルデータ生成スクリプトを実行
+            import subprocess
+            subprocess.run([sys.executable, os.path.join(ROOT_DIR, "src", "generate_sample_data.py"), "--force"])
+            return 0
+        
+        # 拡張引数解析
+        args = parse_advanced_args()
+        
+        try:
+            downloader = CoinglassDownloader()
+            
+            if args.interval:
+                # 単一時間枠の処理
+                start_time = None
+                end_time = None
                 
-            downloader.download_data(
-                interval=args.interval,
-                start_time=start_time,
-                end_time=end_time,
-                limit=args.limit
-            )
-        else:
-            # 全時間枠の処理
-            downloader.download_all_intervals()
+                if args.start:
+                    start_time = datetime.strptime(args.start, '%Y-%m-%d %H:%M:%S')
+                if args.end:
+                    end_time = datetime.strptime(args.end, '%Y-%m-%d %H:%M:%S')
+                    
+                downloader.download_data(
+                    interval=args.interval,
+                    start_time=start_time,
+                    end_time=end_time,
+                    limit=args.limit
+                )
+            else:
+                # 全時間枠の処理
+                downloader.download_all_intervals()
+        
+        except (requests.ConnectionError, requests.Timeout) as e:
+            logger.error(f"APIへの接続エラー: {str(e)}")
+            logger.error("Coinglassサーバーに接続できません。ネットワーク接続を確認してください。")
+            
+            if args.allow_sample:
+                logger.warning("""
+                =====================================================================
+                警告: API接続エラーのため、サンプルデータを生成します。
+                サンプルデータはテスト目的でのみ使用し、
+                実際のトレーディングには使用しないでください。
+                =====================================================================
+                """)
+                
+                # サンプルデータ生成スクリプトを実行
+                import subprocess
+                subprocess.run([sys.executable, os.path.join(ROOT_DIR, "src", "generate_sample_data.py"), "--force"])
+                return 0
+            else:
+                logger.error("""
+                =====================================================================
+                エラー: API接続エラーが発生しました。
+                
+                サンプルデータを使用するには、--allow-sample オプションを付けて再実行してください:
+                python src/download.py --allow-sample
+                
+                または、以下の方法でサンプルデータを直接生成できます:
+                python src/generate_sample_data.py --force
+                
+                警告: サンプルデータはテスト目的専用です。
+                      本番環境や実際のトレーディングには使用しないでください。
+                =====================================================================
+                """)
+                return 1
         
         return 0
     
