@@ -325,36 +325,48 @@ def calculate_rolling_var(returns: pd.Series, percentile: int = 95, window: int 
     var = returns.rolling(window=window).apply(roll_var, raw=True)
     return var.abs()  # 絶対値を取る
 
-def run_backtest(data: pd.DataFrame, interval: str = '15m') -> Dict[str, Any]:
+def run_backtest(data: pd.DataFrame = None, interval: str = '2h', symbol: str = 'BTC-USD', days: int = 360) -> Dict[str, Any]:
     """
-    バックテストを実行
-    
+    バックテストを実行（単一時間枠）
+
     Parameters:
     -----------
-    data : pd.DataFrame
-        入力データフレーム
+    data : pd.DataFrame, optional
+        入力データフレーム（提供されない場合は自動取得）
     interval : str
-        バックテストの時間枠 (15m/2h/1d)
-        
+        バックテストの時間枠 (デフォルト: '2h')
+    symbol : str
+        取得対象のシンボル（データが提供されない場合に使用）
+    days : int
+        取得する日数（データが提供されない場合に使用、デフォルト: 360日）
+
     Returns:
     --------
     dict
         バックテスト結果
     """
     logger.info(f"{interval}のバックテスト実行中...")
-    
+
     # 設定読み込み
     fees_config = load_config('fees')
     trading_fee = fees_config.get('trading_fee', 0.00055)
     slippage = fees_config.get('slippage', 0.0001)
-    
+
+    # データが提供されていない場合は取得
+    if data is None:
+        from src.data.sync import DataSync
+        api_key_file = os.path.join(project_root, 'config', 'api_keys.yaml')
+        data_sync = DataSync(api_key_file=api_key_file)
+        data = data_sync.fetch_single_timeframe_data(symbol=symbol, interval=interval, limit=days)
+        logger.info(f"{len(data)}行のデータを取得しました（{days}日分）")
+
     # シグナル生成
     df_signals = generate_signals(data, interval)
-    
+
     # 必要な列を取得
     price = df_signals['close']
     signal = df_signals['signal'].fillna(0)
-    
+
     # vectorbtでバックテスト実行
     # fees：取引手数料
     # slippage：スリッページ
@@ -383,7 +395,7 @@ def run_backtest(data: pd.DataFrame, interval: str = '15m') -> Dict[str, Any]:
             fees=trading_fee,
             init_cash=10000          # 初期資金
         )
-    
+
     # VectorBTのポートフォリオ結果をカスタム辞書に変換
     result = {
         'portfolio': portfolio,
@@ -392,7 +404,7 @@ def run_backtest(data: pd.DataFrame, interval: str = '15m') -> Dict[str, Any]:
         'df': df_signals,
         'interval': interval
     }
-    
+
     logger.info(f"{interval}のバックテスト完了")
-    
+
     return result

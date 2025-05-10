@@ -31,7 +31,7 @@
   "direction_bias": "UNKNOWN",
   "feature_importance": {
     "trend": 0.9318437530495582,
-    "funding_rate": 0.8228588562422434,
+    "funding_rate": 0.7900263141931949,
     "rsi": 0.7573559155061604,
     "atr": 0.7355124049007298,
     "close": 0.7244937618296369,
@@ -43,9 +43,9 @@
   },
   "feature_groups": {
     "price_data": 3.224596534263753,
-    "funding_rates": 0.8228588562422434,
-    "open_interest": 0.005968329138939554,
-    "premium": 0.07074274879848919,
+    "funding_rates": 0.7900263141931949,
+    "open_interest": 0.024226424785480972,
+    "premium": 0.16520153196814477,
     "technical_indicators": 2.122465609918136,
     "trend_momentum": 1.5077515964741612
   },

@@ -955,3 +955,96 @@ class DataSync:
         else:
             logger.warning(f"未サポートのリサンプリング: {source_interval} → {target_interval}")
             return pd.Series(index=series.index)
+            
+    def fetch_single_timeframe_data(self, symbol: str = 'BTC-USD', interval: str = '2h', limit: int = 360) -> pd.DataFrame:
+        """
+        指定した単一時間枠のデータを取得（MTFではなく2h時間枠のみを使用）
+        
+        Parameters:
+        -----------
+        symbol : str
+            取得対象のシンボル（例: 'BTC-USD'）
+        interval : str 
+            時間枠（デフォルト: '2h'）
+        limit : int
+            取得する日数（デフォルト: 360日分 = 4320レコード）
+            
+        Returns:
+        --------
+        pd.DataFrame
+            取得したデータ
+        """
+        logger.info(f"単一時間枠データ取得を開始: {interval}")
+        
+        # 時間枠ごとのレコード数計算
+        records_per_day = {
+            '15m': 4 * 24,  # 15分足は1日に96レコード
+            '2h': 12,       # 2時間足は1日に12レコード
+            '1d': 1         # 日足は1日に1レコード
+        }
+        
+        # 日数からレコード数に変換
+        records = limit * records_per_day.get(interval, 12)
+        
+        # 価格データを取得
+        data = self.fetch_price_data(symbol, interval, records)
+        
+        # 需給指標データを追加
+        if interval == '2h':
+            # OIデータを取得
+            oi_data = self.fetch_oi_data(symbol, interval, records)
+            
+            # ファンディングレートを取得
+            funding_data = self.fetch_funding_rate(symbol, '8h', records)
+            
+            # データをマージ
+            data = data.merge(oi_data, left_index=True, right_index=True, how='left')
+            data = data.merge(funding_data, left_index=True, right_index=True, how='left')
+            
+            # 需給指標にshift(1)を適用（ラグを考慮）
+            cols_to_shift = ['funding_rate', 'oi_change', 'liquidation', 'long_short_ratio', 'premium_index']
+            for col in cols_to_shift:
+                if col in data.columns:
+                    data[col] = data[col].shift(1)
+            
+            logger.info(f"需給指標を追加し、shift(1)を適用しました")
+        
+        logger.info(f"{interval}データ取得完了: {len(data)}行 x {len(data.columns)}列")
+        return data
+        
+    def sync_single_timeframe(self, symbol: str = 'BTC-USD', interval: str = '2h', force_update: bool = False) -> pd.DataFrame:
+        """
+        単一時間枠のデータを同期（キャッシュ更新も含む）
+        
+        Parameters:
+        -----------
+        symbol : str
+            取得対象のシンボル（例: 'BTC-USD'）
+        interval : str
+            時間枠（デフォルト: '2h'）
+        force_update : bool
+            強制的にAPI取得を行うかどうか
+            
+        Returns:
+        --------
+        pd.DataFrame
+            取得したデータ
+        """
+        # キャッシュ使用設定を一時的に上書き
+        original_cache_setting = self.use_cache
+        if force_update:
+            self.use_cache = False
+        
+        try:
+            data = self.fetch_single_timeframe_data(symbol, interval)
+            
+            # データフォルダに保存
+            cache_path = self.get_cache_path(symbol, interval)
+            data.to_csv(cache_path)
+            logger.info(f"データを保存しました: {cache_path}")
+            
+            return data
+        
+        finally:
+            # 元のキャッシュ設定に戻す
+            self.use_cache = original_cache_setting
