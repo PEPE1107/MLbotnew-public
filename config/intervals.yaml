@@ -1,1 +1,41 @@
-intervals: ["15m", "2h", "1d"]
+# MLbotnew 時間枠設定
+# マルチタイムフレーム戦略で使用する各時間枠の設定
+
+# 基本時間枠定義
+day: 1d     # 日足（大局トレンド判断用）
+hour: 2h    # 2時間足（デイ内需給確認用）
+minute: 15m # 15分足（エントリー用）
+
+# 時間枠間の関係定義
+relationships:
+  # 2時間足 → 15分足のリサンプリング
+  2h_to_15m:
+    source: 2h
+    target: 15m
+    method: ffill  # 前方埋め
+    columns: 
+      - funding_rate
+      - oi_change
+      - liquidation
+      - long_short_ratio
+      - premium_index
+    
+  # 日足 → 15分足のリサンプリング  
+  1d_to_15m:
+    source: 1d
+    target: 15m
+    method: ffill
+    columns:
+      - trend_flag
+
+# バックテスト実行対象の時間枠
+backtest_intervals:
+  - 15m  # 主要バックテスト時間枠
+  - 2h   # 補助バックテスト時間枠
+  - 1d   # トレンド分析用
+
+# データ取得範囲設定
+data_lookback:
+  1d: 365    # 日足：1年分
+  2h: 360    # 2時間足：360日分（limit=4320に対応）
+  15m: 30    # 15分足：30日分

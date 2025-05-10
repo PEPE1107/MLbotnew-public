@@ -134,14 +134,107 @@ def generate_signals(data: pd.DataFrame, interval: str) -> pd.DataFrame:
             df['signal'] = np.where(df['rsi'] < 30, 1, np.where(df['rsi'] > 70, -1, 0))
     
     elif interval == '2h':
-        # 2時間足のロジック - 重要な需給指標を集計
+        # 2時間足のロジック - Coinglassデータを活用した需給指標ベース戦略
+        logger.info("2h Coinglassデータベース戦略を適用します")
+        
+        # 基本テクニカル指標
         df['rsi'] = calculate_rsi(df['close'], 14)
+        df['ema50'] = df['close'].ewm(span=50).mean()
         df['ema200'] = df['close'].ewm(span=200).mean()
-        df['signal'] = np.where(
-            (df['rsi'] < 30) & (df['close'] > df['ema200']), 
-            1, 
-            np.where((df['rsi'] > 70) & (df['close'] < df['ema200']), -1, 0)
-        )
+        df['atr'] = calculate_atr(df, 14)
+        
+        # Coinglassデータ列を特定
+        funding_cols = [col for col in df.columns if 'funding_' in col]
+        oi_cols = [col for col in df.columns if 'oi_' in col]
+        liq_cols = [col for col in df.columns if 'liq_' in col or 'liquidation' in col]
+        lsr_cols = [col for col in df.columns if 'lsr_' in col or 'longShortRatio' in col]
+        premium_cols = [col for col in df.columns if 'premium_' in col]
+        
+        # 需給指標の集計変数を初期化
+        supply_demand_score = np.zeros(len(df))
+        
+        # 1. ファンディングレート指標
+        if funding_cols:
+            funding_col = next((col for col in funding_cols if col.endswith('_c') or 'rate' in col), None)
+            if funding_col:
+                logger.info(f"ファンディングレート指標を使用: {funding_col}")
+                # ファンディングレートの正規化
+                df['funding_z'] = (df[funding_col] - df[funding_col].rolling(30).mean()) / df[funding_col].rolling(30).std()
+                # 負のファンディングはロング有利、正のファンディングはショート有利
+                supply_demand_score -= df['funding_z'].fillna(0).clip(-3, 3) / 3
+        
+        # 2. 未決済建玉（OI）指標
+        if oi_cols:
+            oi_col = next((col for col in oi_cols if col.endswith('_c')), None)
+            if oi_col:
+                logger.info(f"OI指標を使用: {oi_col}")
+                # OI変化率
+                df['oi_change'] = df[oi_col].pct_change(5)
+                # OIの急増はトレンド転換の可能性
+                df['oi_z'] = (df['oi_change'] - df['oi_change'].rolling(30).mean()) / df['oi_change'].rolling(30).std()
+                # 価格上昇 + OI増加 = 強気、価格下落 + OI増加 = 弱気
+                oi_signal = np.sign(df['close'].pct_change(5)) * np.sign(df['oi_change'])
+                supply_demand_score += oi_signal.fillna(0) * 0.5
+        
+        # 3. 清算データ指標
+        if len(liq_cols) >= 2:
+            long_liq_col = next((col for col in liq_cols if 'long' in col.lower()), None)
+            short_liq_col = next((col for col in liq_cols if 'short' in col.lower()), None)
+            if long_liq_col and short_liq_col:
+                logger.info(f"清算データ指標を使用: {long_liq_col}, {short_liq_col}")
+                # 清算比率（ロング/ショート）
+                df['liq_ratio'] = df[long_liq_col] / (df[short_liq_col] + 1e-10)
+                # 比率の対数を取って正規化
+                df['liq_ratio_log'] = np.log(df['liq_ratio'].clip(0.1, 10))
+                df['liq_z'] = (df['liq_ratio_log'] - df['liq_ratio_log'].rolling(30).mean()) / df['liq_ratio_log'].rolling(30).std()
+                # ショート清算増加はロング有利、ロング清算増加はショート有利
+                supply_demand_score -= df['liq_z'].fillna(0).clip(-3, 3) / 3
+        
+        # 4. ロングショート比率指標
+        if lsr_cols:
+            lsr_col = next((col for col in lsr_cols if 'ratio' in col.lower()), None)
+            if lsr_col:
+                logger.info(f"LSR指標を使用: {lsr_col}")
+                # LSRの正規化（1.0が均衡）
+                df['lsr_norm'] = df[lsr_col] - 1.0
+                df['lsr_z'] = (df['lsr_norm'] - df['lsr_norm'].rolling(30).mean()) / df['lsr_norm'].rolling(30).std()
+                # 逆張り：LSRが高すぎるとショート、低すぎるとロング
+                supply_demand_score -= df['lsr_z'].fillna(0).clip(-3, 3) / 3
+        
+        # 5. プレミアム指標
+        if premium_cols:
+            premium_col = next((col for col in premium_cols if 'rate' in col.lower()), None)
+            if premium_col:
+                logger.info(f"プレミアム指標を使用: {premium_col}")
+                # プレミアムの正規化
+                df['premium_z'] = (df[premium_col] - df[premium_col].rolling(30).mean()) / df[premium_col].rolling(30).std()
+                # プレミアムが高いとショート有利、低いとロング有利
+                supply_demand_score -= df['premium_z'].fillna(0).clip(-3, 3) / 3
+        
+        # 需給指標とテクニカル指標の組み合わせ
+        # 1. トレンド判断（EMA200）
+        df['trend'] = np.where(df['close'] > df['ema200'], 1, -1)
+        
+        # 2. モメンタム判断（RSI）
+        df['momentum'] = np.where(df['rsi'] < 30, 1, np.where(df['rsi'] > 70, -1, 0))
+        
+        # 3. 統合シグナル計算
+        # - トレンド：30%
+        # - モメンタム：20%
+        # - 需給指標：50%
+        df['signal_raw'] = (0.3 * df['trend'] + 0.2 * df['momentum'] + 0.5 * supply_demand_score)
+        
+        # シグナルのスムージング
+        df['signal_smooth'] = df['signal_raw'].rolling(3).mean().fillna(df['signal_raw'])
+        
+        # ポジションサイズを決定（-1.0～1.0）
+        df['signal'] = df['signal_smooth'].clip(-1.0, 1.0)
+        
+        # トレード数を適切に抑制するためのフィルター
+        df['signal_change'] = df['signal'].diff().abs()
+        # シグナル変化が小さい場合は前の値を維持
+        mask = df['signal_change'] < 0.3
+        df.loc[mask, 'signal'] = df['signal'].shift(1)
     
     elif interval == '1d':
         # 日足のロジック - 大局トレンド判断
@@ -178,6 +271,35 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     rsi = 100 - (100 / (1 + rs))
     
     return rsi
+
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """
+    ATR（Average True Range）を計算
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        価格のデータフレーム（'high', 'low', 'close'列を含む）
+    period : int
+        ATRの期間
+        
+    Returns:
+    --------
+    pd.Series
+        ATR値
+    """
+    # True Range計算
+    high_low = df['high'] - df['low']
+    high_close = (df['high'] - df['close'].shift(1)).abs()
+    low_close = (df['low'] - df['close'].shift(1)).abs()
+    
+    # 3つの中から最大値を取得
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    
+    # ATR計算（単純移動平均）
+    atr = tr.rolling(window=period).mean()
+    
+    return atr
 
 def calculate_rolling_var(returns: pd.Series, percentile: int = 95, window: int = 20) -> pd.Series:
     """

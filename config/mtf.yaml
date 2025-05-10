@@ -1,13 +1,52 @@
-# Multi-TimeFrame フィルター設定
+# MLbotnew マルチタイムフレーム設定
+# 各タイムフレーム間のデータ転送および連携ルール
 
-# 日足トレンドフィルターの有効/無効
-use_trend_filter: true
+# 主要時間枠定義（intervals.yaml と同期）
+timeframes:
+  trend: 1d    # トレンド判断（日足）
+  supply: 2h   # 需給指標（2時間足）
+  entry: 15m   # エントリー判断（15分足）
 
-# フィルター設定
-trend_filter:
-  # 日足のどの指標を使用するか
-  indicator: "ema"  # ema, sma
-  # 指標の期間
-  period: 200
-  # 上昇トレンドと判定する条件
-  condition: "price_above"  # price_above, price_below
+# 時間枠間のデータ転送ルール
+transfers:
+  # 日足 → 15分足へのデータ転送
+  trend_to_entry:
+    source: 1d
+    target: 15m
+    columns:
+      - name: trend_flag
+        transform: shift(1)  # 前日分を参照
+        fill_method: ffill   # 前方埋め
+    
+  # 2時間足 → 15分足へのデータ転送
+  supply_to_entry:
+    source: 2h
+    target: 15m
+    columns:
+      - name: funding_rate
+        transform: shift(1)  # 前の時間帯を参照
+        fill_method: ffill
+      - name: oi_change
+        transform: shift(1)
+        fill_method: ffill
+      - name: liquidation
+        transform: shift(1)
+        fill_method: ffill
+      - name: long_short_ratio
+        transform: shift(1)
+        fill_method: ffill
+      - name: premium_index
+        transform: shift(1)
+        fill_method: ffill
+
+# 各時間枠の役割と処理順序
+processing_order:
+  1: trend   # 最初に日足トレンド判断
+  2: supply  # 次に2時間足需給計算
+  3: entry   # 最後に15分足エントリー判断
+
+# シフト操作の検証設定
+validation:
+  check_future_leak: true    # 未来データ漏洩チェック
+  audit_shift_operations: true   # shift操作の監査
+  verify_resampling: true    # リサンプリング検証

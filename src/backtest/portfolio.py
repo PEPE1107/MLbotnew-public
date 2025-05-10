@@ -40,14 +40,19 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs', 'backtest.log'), mode='a')
+        logging.StreamHandler(sys.stdout)
     ]
 )
+
+# ログファイル設定（パスが存在することを確認）
+logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'logs')
+os.makedirs(logs_dir, exist_ok=True)
+file_handler = logging.FileHandler(os.path.join(logs_dir, 'backtest.log'), mode='a')
+logging.getLogger().addHandler(file_handler)
 logger = logging.getLogger('backtest')
 
 # プロジェクトルートディレクトリ
-ROOT_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT_DIR = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 CONFIG_DIR = ROOT_DIR / 'config'
 DATA_DIR = ROOT_DIR / 'data'
 MODELS_DIR = ROOT_DIR / 'models'
@@ -101,16 +106,36 @@ class SimplePortfolio:
 class BacktestRunner:
     """バックテストクラス"""
     
-    def __init__(self, config_dir: Path = CONFIG_DIR):
+    def __init__(self, config_dir: Path = None):
         """初期化
         
         Args:
             config_dir: 設定ファイルディレクトリ
         """
-        self.config_dir = config_dir
-        self.intervals = self._load_intervals()
-        self.fee_config = self._load_fee_config()
-        self.mtf_config = self._load_mtf_config()
+        # プロジェクトルートからのパスで設定ディレクトリを指定
+        project_root = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        self.config_dir = config_dir if config_dir else project_root / 'config'
+        
+        # 設定ファイル読み込み
+        self.intervals = ['15m', '2h']  # デフォルト値を設定
+        self.fee_config = {'futures': {'taker_fee': 0.0004, 'maker_fee': 0.0002, 'slippage': 0.0001}}
+        self.mtf_config = {"use_trend_filter": False}
+        
+        # 設定ファイルが存在すれば読み込む
+        try:
+            self.intervals = self._load_intervals()
+        except Exception as e:
+            logging.warning(f"時間枠設定の読み込みに失敗しました。デフォルト値を使用します: {e}")
+            
+        try:
+            self.fee_config = self._load_fee_config()
+        except Exception as e:
+            logging.warning(f"手数料設定の読み込みに失敗しました。デフォルト値を使用します: {e}")
+            
+        try:
+            self.mtf_config = self._load_mtf_config()
+        except Exception as e:
+            logging.warning(f"MTF設定の読み込みに失敗しました。デフォルト値を使用します: {e}")
         self.model_dir = MODELS_DIR
         self.report_dir = REPORTS_DIR
         
@@ -177,17 +202,41 @@ class BacktestRunner:
         logger.info(f"データ読み込み開始: {interval}")
         
         # マージ済みデータを読み込む (price_close が必要)
-        merged_path = DATA_DIR / 'features' / interval / 'merged.parquet'
-        if not os.path.exists(merged_path):
-            raise FileNotFoundError(f"マージ済みデータファイルが見つかりません: {merged_path}")
+        data_dir_options = [
+            DATA_DIR,  # 標準パス data/
+            ROOT_DIR / 'src' / 'data',  # 代替パス src/data/
+        ]
+        
+        # 存在するパスを探す
+        merged_path = None
+        for data_dir in data_dir_options:
+            path = data_dir / 'features' / interval / 'merged.parquet'
+            if os.path.exists(path):
+                merged_path = path
+                logger.info(f"マージ済みデータファイルが見つかりました: {merged_path}")
+                break
+        
+        if merged_path is None:
+            raise FileNotFoundError(f"マージ済みデータファイルが見つかりません: {[str(d / 'features' / interval / 'merged.parquet') for d in data_dir_options]}")
         
         df = pd.read_parquet(merged_path)
         logger.info(f"マージ済みデータ読み込み完了: {merged_path}, 形状: {df.shape}")
         
-        # 特徴量読み込み
-        features_path = DATA_DIR / 'features' / interval / 'X.parquet'
+        # 特徴量読み込み - まずmerged_pathと同じディレクトリで探す
+        features_dir = merged_path.parent
+        features_path = features_dir / 'X.parquet'
+        
         if not os.path.exists(features_path):
-            raise FileNotFoundError(f"特徴量ファイルが見つかりません: {features_path}")
+            # 他の場所も探す
+            for data_dir in data_dir_options:
+                path = data_dir / 'features' / interval / 'X.parquet'
+                if os.path.exists(path):
+                    features_path = path
+                    logger.info(f"特徴量ファイルが見つかりました: {features_path}")
+                    break
+            
+            if not os.path.exists(features_path):
+                raise FileNotFoundError(f"特徴量ファイルが見つかりません: {features_path}")
         
         X = pd.read_parquet(features_path)
         logger.info(f"特徴量読み込み完了: {features_path}, 形状: {X.shape}")

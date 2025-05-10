@@ -221,6 +221,233 @@ def generate_stats(backtest_result: Dict[str, Any]) -> Dict[str, Any]:
         'final_capital': float(final_value)
     }
     
+    # ロングとショートのトレード統計
+    try:
+        # ポジションタイプごとのトレード数の計算
+        if hasattr(portfolio.trades, 'position_idx'):
+            # VectorBT 新バージョン
+            long_trades = portfolio.trades[portfolio.trades.position_idx == 0]
+            short_trades = portfolio.trades[portfolio.trades.position_idx == 1]
+        elif 'direction' in portfolio.trades.columns:
+            # 方向情報がある場合（旧バージョンや拡張版）
+            long_trades = portfolio.trades[portfolio.trades['direction'] > 0]
+            short_trades = portfolio.trades[portfolio.trades['direction'] < 0]
+        else:
+            # フォールバック - シグナルに基づいて予測
+            df = backtest_result.get('df', pd.DataFrame())
+            if 'signal' in df.columns:
+                # シグナルの符号に基づいて集計
+                long_days = (df['signal'] > 0).sum()
+                short_days = (df['signal'] < 0).sum()
+                # おおよそのトレード回数を推定
+                long_trades = pd.DataFrame({'pnl': [0] * (total_trades * long_days // (long_days + short_days + 1))})
+                short_trades = pd.DataFrame({'pnl': [0] * (total_trades * short_days // (long_days + short_days + 1))})
+            else:
+                # 詳細情報が取得できない場合
+                long_trades = pd.DataFrame({'pnl': [0]})
+                short_trades = pd.DataFrame({'pnl': [0]})
+        
+        # トレード統計の追加
+        long_count = len(long_trades)
+        short_count = len(short_trades)
+        total_with_direction = long_count + short_count
+        
+        # ロングとショートの比率
+        if total_with_direction > 0:
+            long_ratio = long_count / total_with_direction
+            short_ratio = short_count / total_with_direction
+        else:
+            long_ratio = 0.5
+            short_ratio = 0.5
+        
+        # 各方向のパフォーマンス
+        long_pnl = long_trades['pnl'].sum() / portfolio.init_cash if long_count > 0 else 0
+        short_pnl = short_trades['pnl'].sum() / portfolio.init_cash if short_count > 0 else 0
+        
+        # 方向ごとの勝率
+        long_wins = (long_trades['pnl'] > 0).sum() if long_count > 0 else 0
+        short_wins = (short_trades['pnl'] > 0).sum() if short_count > 0 else 0
+        
+        long_win_rate = long_wins / long_count if long_count > 0 else 0
+        short_win_rate = short_wins / short_count if short_count > 0 else 0
+        
+        # 統計に追加
+        stats.update({
+            'long_trades': int(long_count),
+            'short_trades': int(short_count),
+            'long_ratio': float(long_ratio),
+            'short_ratio': float(short_ratio),
+            'long_pnl_pct': float(long_pnl * 100),
+            'short_pnl_pct': float(short_pnl * 100),
+            'long_win_rate': float(long_win_rate),
+            'short_win_rate': float(short_win_rate),
+            'direction_bias': 'LONG' if long_ratio > 0.6 else ('SHORT' if short_ratio > 0.6 else 'NEUTRAL')
+        })
+    except Exception as e:
+        logger.warning(f"ロング/ショート統計の計算でエラーが発生: {e}")
+        stats.update({
+            'long_trades': 0,
+            'short_trades': 0,
+            'long_ratio': 0.5,
+            'short_ratio': 0.5,
+            'direction_bias': 'UNKNOWN'
+        })
+    
+    # 特徴量の重要度（入力データに基づく簡易分析）
+    try:
+        df = backtest_result.get('df', pd.DataFrame())
+        signal = backtest_result.get('signal', pd.Series())
+        
+        if not df.empty and not signal.empty:
+            # 特徴量の候補を取得（価格・ボリューム・テクニカル指標）
+            feature_columns = []
+            
+            # 基本OHLCV列
+            ohlcv_columns = ['open', 'high', 'low', 'close', 'volume']
+            feature_columns.extend([col for col in ohlcv_columns if col in df.columns])
+            
+            # テクニカル指標
+            technical_patterns = ['rsi', 'ema', 'sma', 'macd', 'atr', 'cci', 'trend', 'momentum']
+            for col in df.columns:
+                if any(pattern in col.lower() for pattern in technical_patterns):
+                    feature_columns.append(col)
+            
+            # Coinglassデータ列
+            for prefix in ['funding_', 'oi_', 'liq_', 'lsr_', 'premium_']:
+                for col in df.columns:
+                    if col.startswith(prefix):
+                        feature_columns.append(col)
+            
+            # 特徴量に対するシグナルの相関係数を計算
+            feature_importance = {}
+            for feature in feature_columns:
+                if feature in df.columns:
+                    # 一部のカラムは型変換が必要
+                    try:
+                        feature_data = pd.to_numeric(df[feature], errors='coerce')
+                        if not feature_data.empty and not signal.empty:
+                            # 有効なデータポイントのみで相関を計算
+                            valid_indices = ~(feature_data.isna() | signal.isna())
+                            if valid_indices.sum() > 10:  # 十分なデータポイントがある場合
+                                corr = feature_data[valid_indices].corr(signal[valid_indices])
+                                if not np.isnan(corr):
+                                    feature_importance[feature] = abs(corr)  # 絶対値で重要度を評価
+                    except Exception as e:
+                        logger.debug(f"特徴量 '{feature}' の相関計算でエラー: {e}")
+            
+            # 重要度でソート
+            sorted_importance = dict(sorted(feature_importance.items(), key=lambda x: x[1], reverse=True))
+            
+            # 上位10件を取得
+            top_features = {k: float(v) for k, v in list(sorted_importance.items())[:10]}
+            
+            # 特徴量グループごとの集計（Coinglassデータ種別ごとなど）
+            grouped_importance = {}
+            
+            # OHLCVグループ
+            ohlcv_imp = sum(v for k, v in sorted_importance.items() if any(k.endswith(suffix) for suffix in ['_o', '_h', '_l', '_c', '_v']) or k in ohlcv_columns)
+            if ohlcv_imp > 0:
+                grouped_importance['price_data'] = float(ohlcv_imp)
+            
+            # 需給指標グループ
+            for prefix, group_name in [
+                ('funding_', 'funding_rates'),
+                ('oi_', 'open_interest'),
+                ('liq_', 'liquidations'),
+                ('lsr_', 'long_short_ratio'),
+                ('premium_', 'premium')
+            ]:
+                group_imp = sum(v for k, v in sorted_importance.items() if k.startswith(prefix))
+                if group_imp > 0:
+                    grouped_importance[group_name] = float(group_imp)
+            
+            # テクニカル指標グループ
+            tech_imp = sum(v for k, v in sorted_importance.items() 
+                         if any(pattern in k.lower() for pattern in ['rsi', 'ema', 'sma', 'macd', 'atr']) 
+                         and not any(k.startswith(prefix) for prefix in ['funding_', 'oi_', 'liq_', 'lsr_', 'premium_']))
+            if tech_imp > 0:
+                grouped_importance['technical_indicators'] = float(tech_imp)
+            
+            # トレンド/モメンタム指標
+            trend_imp = sum(v for k, v in sorted_importance.items() if 'trend' in k.lower() or 'momentum' in k.lower())
+            if trend_imp > 0:
+                grouped_importance['trend_momentum'] = float(trend_imp)
+            
+            # 統計に追加
+            stats.update({
+                'feature_importance': top_features,
+                'feature_groups': grouped_importance
+            })
+    except Exception as e:
+        logger.warning(f"特徴量重要度の計算でエラーが発生: {e}")
+        stats.update({
+            'feature_importance': {},
+            'feature_groups': {}
+        })
+    
+    # 追加の統計情報
+    try:
+        # ドローダウン期間の分析
+        dd_series = drawdown
+        
+        # 平均ドローダウン期間（バー数）
+        dd_periods = []
+        is_in_dd = False
+        current_dd_start = 0
+        
+        for i, dd_value in enumerate(dd_series):
+            if dd_value < 0 and not is_in_dd:
+                # ドローダウン開始
+                is_in_dd = True
+                current_dd_start = i
+            elif dd_value == 0 and is_in_dd:
+                # ドローダウン終了
+                is_in_dd = False
+                dd_periods.append(i - current_dd_start)
+        
+        # 最後のドローダウンが続いている場合
+        if is_in_dd:
+            dd_periods.append(len(dd_series) - current_dd_start)
+        
+        avg_dd_bars = np.mean(dd_periods) if dd_periods else 0
+        max_dd_bars = np.max(dd_periods) if dd_periods else 0
+        
+        # 時間枠に基づく期間の単位変換（バー数→日数）
+        bars_per_day = 1  # デフォルト（日足）
+        if interval == '15m':
+            bars_per_day = 24 * 4  # 15分足は1日に4*24回
+        elif interval == '2h':
+            bars_per_day = 12  # 2時間足は1日に12回
+        
+        avg_dd_days = avg_dd_bars / bars_per_day
+        max_dd_days = max_dd_bars / bars_per_day
+        
+        # 月別リターン
+        if hasattr(portfolio, 'returns') and not callable(portfolio.returns):
+            monthly_returns_by_date = {}
+            try:
+                monthly_returns_series = portfolio.returns.resample('ME').apply(lambda x: (1 + x).prod() - 1)
+                for date, value in monthly_returns_series.items():
+                    if not pd.isna(value):
+                        monthly_returns_by_date[date.strftime('%Y-%m')] = float(value * 100)  # パーセント表示
+            except Exception as e:
+                logger.debug(f"月別リターンの計算でエラー: {e}")
+        else:
+            monthly_returns_by_date = {}
+        
+        # 追加統計
+        stats.update({
+            'avg_drawdown_duration_bars': float(avg_dd_bars),
+            'max_drawdown_duration_bars': float(max_dd_bars),
+            'avg_drawdown_duration_days': float(avg_dd_days),
+            'max_drawdown_duration_days': float(max_dd_days),
+            'monthly_returns': monthly_returns_by_date,
+            'ulcer_index': float(np.sqrt(np.mean(np.square(dd_series.fillna(0))))),
+            'recovery_factor': float(total_return_pct / abs(max_drawdown_pct)) if max_drawdown_pct != 0 else 0
+        })
+    except Exception as e:
+        logger.warning(f"追加統計の計算でエラーが発生: {e}")
+    
     logger.info("統計情報計算完了")
     
     # NANとInfinityをフィルタリング 

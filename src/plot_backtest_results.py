@@ -1,396 +1,552 @@
 #!/usr/bin/env python
 """
-plot_backtest_results.py - バックテスト結果をグラフ化して保存するスクリプト
+plot_backtest_results.py - バックテスト結果プロットモジュール
 
 機能:
-- リターン曲線のグラフ化
-- ドローダウンのグラフ化
-- 月次/週次パフォーマンスのヒートマップ
-- 主要指標のサマリーテーブル
+- リターン曲線のプロット (BTCの市場価格を追加)
+- ドローダウン曲線のプロット
+- 月次リターンヒートマップ
+- サマリーテーブル
 """
 
 import os
-import sys
-import pickle
 import logging
-import numpy as np
-import pandas as pd
-from pathlib import Path
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-from matplotlib.colors import LinearSegmentedColormap
-import seaborn as sns
-from tabulate import tabulate
+import pickle
 from datetime import datetime
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib.ticker import FuncFormatter
+from typing import Dict, List, Optional, Any, Union, Tuple
 
-# アプリケーションルートへのパスを設定
-app_home = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.append(str(app_home))
-
-# src ディレクトリをインポートパスに追加
-src_path = app_home / "src"
-sys.path.append(str(src_path))
-
-# バックテストモジュールからSimplePortfolioクラスをインポート
-from backtest import SimplePortfolio
+# 内部モジュール
+import sys
+sys_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if sys_path not in sys.path:
+    sys.path.append(sys_path)
+    
+from backtest.portfolio import SimplePortfolio
 
 # ロギング設定
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger('plot_results')
+logger = logging.getLogger(__name__)
 
-def load_portfolio(file_path):
-    """ポートフォリオオブジェクトを読み込む"""
-    try:
-        with open(file_path, 'rb') as f:
-            portfolio = pickle.load(f)
-        return portfolio
-    except Exception as e:
-        logger.error(f"ポートフォリオ読み込みエラー: {e}")
+def plot_returns_with_btc(portfolio: SimplePortfolio, save_path: Optional[str] = None) -> plt.Figure:
+    """
+    リターン曲線をBTC価格と一緒にプロット
+
+    Parameters:
+    -----------
+    portfolio : SimplePortfolio
+        バックテスト結果のポートフォリオオブジェクト
+    save_path : str, optional
+        保存先パス
+    
+    Returns:
+    --------
+    plt.Figure
+        プロット図オブジェクト
+    """
+    if not hasattr(portfolio, 'df') or portfolio.df is None:
+        logger.warning("ポートフォリオにdfがありません")
         return None
-
-def setup_plot_style():
-    """プロットのスタイル設定"""
-    plt.style.use('fivethirtyeight')
-    plt.rcParams['figure.figsize'] = (12, 7)
-    plt.rcParams['figure.dpi'] = 100
-    plt.rcParams['font.size'] = 12
     
-    # フォントを日本語対応に設定（利用可能なフォントがあれば使用）
+    # BTCの価格データを取得
     try:
-        plt.rcParams['font.family'] = 'Yu Gothic'
-    except:
-        try:
-            plt.rcParams['font.family'] = 'MS Gothic'
-        except:
-            pass  # フォール バック: デフォルトフォントを使用
-
-def plot_returns(portfolio, interval, output_dir):
-    """リターン曲線をプロット"""
-    plt.figure(figsize=(14, 8))
+        # ポートフォリオのインデックスから日付範囲を取得
+        if hasattr(portfolio.df.index, 'min') and hasattr(portfolio.df.index, 'max'):
+            start_date = portfolio.df.index.min()
+            end_date = portfolio.df.index.max()
+            
+            # インデックスがdatetime型でない場合は変換をスキップ
+            btc_price = None
+            if 'price_close' in portfolio.df.columns:
+                # 既に価格データがある場合はそれを使用
+                btc_price = portfolio.df['price_close']
+                logger.info(f"既存の価格データを使用 (price_close): {len(btc_price)}行")
+            elif 'price' in portfolio.df.columns:
+                # price列がある場合はそれを使用
+                btc_price = portfolio.df['price']
+                logger.info(f"既存の価格データを使用 (price): {len(btc_price)}行")
+        else:
+            btc_price = None
+            logger.warning("ポートフォリオのインデックスからは日付範囲を取得できません")
+    except Exception as e:
+        logger.error(f"BTCの価格データ取得中にエラー発生: {str(e)}")
+        btc_price = None
     
-    # リターン曲線
-    ax = portfolio.df['cumulative_returns'].plot(color='#1f77b4', linewidth=2)
+    # グラフ作成
+    fig, ax1 = plt.subplots(figsize=(12, 6))
     
-    # グラフの設定
-    plt.title(f'{interval} 時間枠 累積リターン', fontsize=16)
-    plt.grid(True, alpha=0.3)
-    plt.ylabel('累積リターン (1 = 元本)', fontsize=14)
-    
-    # X軸の日付フォーマットを設定
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-    plt.xticks(rotation=45)
-    
-    # 水平線を追加（元本を表す）
-    plt.axhline(y=1.0, color='r', linestyle='-', alpha=0.3)
-    
-    # 実績をテキストで表示
-    stats = portfolio.stats()
-    annual_return = stats['Annual Return [%]']
-    sharpe = stats['Sharpe Ratio']
-    max_dd = stats['Max Drawdown [%]']
-    
-    text_info = f"年間リターン: {annual_return:.2f}%\nシャープレシオ: {sharpe:.2f}\n最大DD: {max_dd:.2f}%"
-    plt.annotate(text_info, xy=(0.02, 0.95), xycoords='axes fraction', 
-                 bbox=dict(boxstyle="round,pad=0.5", facecolor='white', alpha=0.8),
-                 fontsize=12, verticalalignment='top')
-    
-    # 保存先ディレクトリ作成
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # プロットを保存
-    plot_path = os.path.join(output_dir, f'{interval}_returns.png')
-    plt.tight_layout()
-    plt.savefig(plot_path)
-    logger.info(f"リターンプロット保存: {plot_path}")
-    plt.close()
-
-def plot_drawdowns(portfolio, interval, output_dir):
-    """ドローダウンをプロット"""
-    plt.figure(figsize=(14, 8))
-    
-    # ドローダウン計算
-    running_max = portfolio.df['cumulative_returns'].cummax()
-    drawdown = (portfolio.df['cumulative_returns'] / running_max - 1) * 100
-    
-    # ドローダウンプロット
-    drawdown.plot(color='#d62728', linewidth=2)
-    
-    # グラフの設定
-    plt.title(f'{interval} 時間枠 ドローダウン', fontsize=16)
-    plt.grid(True, alpha=0.3)
-    plt.ylabel('ドローダウン (%)', fontsize=14)
-    
-    # 最大ドローダウンをマーク
-    min_idx = drawdown.idxmin()
-    min_value = drawdown.min()
-    plt.plot(min_idx, min_value, 'ro')
-    plt.annotate(f'最大DD: {min_value:.2f}%', 
-                xy=(min_idx, min_value),
-                xytext=(min_idx, min_value*0.8),
-                arrowprops=dict(facecolor='black', shrink=0.05, width=1.5, headwidth=8),
-                bbox=dict(boxstyle="round,pad=0.5", facecolor='white', alpha=0.8))
-    
-    # 保存
-    plot_path = os.path.join(output_dir, f'{interval}_drawdowns.png')
-    plt.tight_layout()
-    plt.savefig(plot_path)
-    logger.info(f"ドローダウンプロット保存: {plot_path}")
-    plt.close()
-
-def plot_monthly_returns(portfolio, interval, output_dir):
-    """月次リターンのヒートマップをプロット"""
-    # データフレームを取得
-    df = portfolio.df.copy()
-    
-    # 日次リターンに変換
-    if 'strategy_returns' in df.columns:
-        returns = df['strategy_returns']
+    # リターン曲線プロット
+    if 'cumulative_returns' in portfolio.df.columns:
+        portfolio.df['cumulative_returns'].plot(ax=ax1, color='blue', label='Strategy Returns')
+        
+        # 開始値と終了値をテキスト表示
+        start_value = portfolio.df['cumulative_returns'].iloc[0]
+        end_value = portfolio.df['cumulative_returns'].iloc[-1]
+        
+        # プロット開始位置と終了位置に値をテキスト表示
+        ax1.text(portfolio.df.index[0], start_value, f'{start_value:.2f}',
+                verticalalignment='bottom', horizontalalignment='left')
+        ax1.text(portfolio.df.index[-1], end_value, f'{end_value:.2f}',
+                verticalalignment='bottom', horizontalalignment='right')
     else:
-        returns = df['cumulative_returns'].pct_change().fillna(0)
+        logger.warning("cumulative_returns列が見つかりません")
     
-    # 日付インデックスを確認、必要に応じて変換
-    if not isinstance(returns.index, pd.DatetimeIndex):
-        # 数値インデックスの場合は、適当な開始日から日付を生成
-        start_date = pd.Timestamp('2020-01-01')
-        dates = pd.date_range(start=start_date, periods=len(returns))
-        returns.index = dates
+    ax1.set_ylabel('Strategy Returns', color='blue')
+    ax1.tick_params(axis='y', labelcolor='blue')
+    ax1.grid(True, alpha=0.3)
     
-    # 月次リターン表を作成
-    monthly_returns = returns.resample('M').apply(lambda x: (1 + x).prod() - 1).to_frame()
-    monthly_returns.columns = ['return']
+    # BTC価格のプロット（価格データがある場合）
+    if btc_price is not None and len(btc_price) > 0:
+        ax2 = ax1.twinx()  # 二次Y軸を作成
+        btc_price.plot(ax=ax2, color='red', alpha=0.7, label='BTC Price')
+        ax2.set_ylabel('BTC Price (USD)', color='red')
+        ax2.tick_params(axis='y', labelcolor='red')
+        
+        # 凡例の設定
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
+    else:
+        ax1.legend(loc='upper left')
     
-    # 年と月の列を追加
-    monthly_returns['year'] = monthly_returns.index.year
-    monthly_returns['month'] = monthly_returns.index.month
-    
-    # ピボットテーブル作成
-    pivot_table = monthly_returns.pivot_table(index='year', columns='month', values='return')
-    
-    # 月の名前に変換
-    month_names = {1: '1月', 2: '2月', 3: '3月', 4: '4月', 5: '5月', 6: '6月',
-                   7: '7月', 8: '8月', 9: '9月', 10: '10月', 11: '11月', 12: '12月'}
-    pivot_table.columns = [month_names[m] for m in pivot_table.columns]
-    
-    # パーセントに変換
-    pivot_table = pivot_table * 100
-    
-    # ヒートマップ作成
-    plt.figure(figsize=(14, 8))
-    
-    # カスタムカラーマップ (緑=利益、赤=損失)
-    cmap = LinearSegmentedColormap.from_list('rg', ["#d62728", "#FFFFFF", "#2ca02c"], N=256)
-    
-    ax = sns.heatmap(pivot_table, annot=True, cmap=cmap, center=0, fmt='.1f',
-                    linewidths=0.5, cbar_kws={'label': 'リターン (%)'})
-    
-    plt.title(f'{interval} 時間枠 月次リターン (%)', fontsize=16)
-    plt.ylabel('年', fontsize=14)
-    
-    # 保存
-    plot_path = os.path.join(output_dir, f'{interval}_monthly_returns.png')
+    ax1.set_title('Cumulative Returns with BTC Price')
     plt.tight_layout()
-    plt.savefig(plot_path)
-    logger.info(f"月次リターンヒートマップ保存: {plot_path}")
-    plt.close()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=100, bbox_inches='tight')
+    
+    return fig
 
-def plot_summary_table(portfolio, interval, output_dir):
-    """主要指標のサマリーテーブルを画像として保存"""
-    plt.figure(figsize=(10, 6))
+def plot_returns(portfolio: SimplePortfolio, save_path: Optional[str] = None) -> plt.Figure:
+    """
+    リターン曲線をプロット
+
+    Parameters:
+    -----------
+    portfolio : SimplePortfolio
+        バックテスト結果のポートフォリオオブジェクト
+    save_path : str, optional
+        保存先パス
     
-    # Canvas をアックス無しでプロット (表のみ)
-    ax = plt.subplot(111, frame_on=False)
-    ax.xaxis.set_visible(False)
-    ax.yaxis.set_visible(False)
+    Returns:
+    --------
+    plt.Figure
+        プロット図オブジェクト
+    """
+    if not hasattr(portfolio, 'df') or portfolio.df is None:
+        logger.warning("ポートフォリオにdfがありません")
+        return None
     
-    # 統計データ取得
-    stats = portfolio.stats()
+    fig, ax = plt.subplots(figsize=(12, 6))
     
-    # MAR比率（CAGR / 最大ドローダウン）の計算
-    annual_return = stats.get('Annual Return [%]', 0) / 100  # パーセントから小数に変換
-    max_dd = abs(stats.get('Max Drawdown [%]', 0) / 100)  # パーセントから小数に変換、絶対値を取る
-    mar_ratio = annual_return / max_dd if max_dd != 0 else float('inf')
+    if 'cumulative_returns' in portfolio.df.columns:
+        portfolio.df['cumulative_returns'].plot(ax=ax)
+        
+        # 開始値と終了値をテキスト表示
+        start_value = portfolio.df['cumulative_returns'].iloc[0]
+        end_value = portfolio.df['cumulative_returns'].iloc[-1]
+        
+        # プロット開始位置と終了位置に値をテキスト表示
+        ax.text(portfolio.df.index[0], start_value, f'{start_value:.2f}',
+                verticalalignment='bottom', horizontalalignment='left')
+        ax.text(portfolio.df.index[-1], end_value, f'{end_value:.2f}',
+                verticalalignment='bottom', horizontalalignment='right')
+    else:
+        logger.warning("cumulative_returns列が見つかりません")
     
-    # 表示する指標とその値を選択
-    summary_data = {
-        '指標': ['年間リターン', 'シャープレシオ', 'ソルティノレシオ', '最大ドローダウン', 'MAR比率', 
-                'Win率', '平均勝ちトレード', '平均負けトレード', 'プロフィットファクター'],
-        '値': [
-            f"{stats.get('Annual Return [%]', 0):.2f}%",
-            f"{stats.get('Sharpe Ratio', 0):.2f}",
-            f"{stats.get('Sortino Ratio', 0):.2f}" if 'Sortino Ratio' in stats else "N/A",
-            f"{stats.get('Max Drawdown [%]', 0):.2f}%",
-            f"{mar_ratio:.2f}",
-            f"{stats.get('Win Rate [%]', 0):.2f}%" if 'Win Rate [%]' in stats else "N/A",
-            f"{stats.get('Avg Winning Trade [%]', 0):.2f}%" if 'Avg Winning Trade [%]' in stats else "N/A",
-            f"{stats.get('Avg Losing Trade [%]', 0):.2f}%" if 'Avg Losing Trade [%]' in stats else "N/A",
-            f"{stats.get('Profit Factor', 0):.2f}" if 'Profit Factor' in stats else "N/A"
-        ]
-    }
+    ax.set_title('Cumulative Returns')
+    ax.set_ylabel('Returns')
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
     
-    # データフレーム作成
-    summary_df = pd.DataFrame(summary_data)
+    if save_path:
+        plt.savefig(save_path, dpi=100, bbox_inches='tight')
     
-    # テーブルとして表示
-    table = plt.table(
-        cellText=summary_df.values,
-        colLabels=summary_df.columns,
-        cellLoc='center',
+    return fig
+
+def plot_drawdowns(portfolio: SimplePortfolio, save_path: Optional[str] = None) -> plt.Figure:
+    """
+    ドローダウン曲線をプロット
+
+    Parameters:
+    -----------
+    portfolio : SimplePortfolio
+        バックテスト結果のポートフォリオオブジェクト
+    save_path : str, optional
+        保存先パス
+    
+    Returns:
+    --------
+    plt.Figure
+        プロット図オブジェクト
+    """
+    if not hasattr(portfolio, 'df') or portfolio.df is None:
+        logger.warning("ポートフォリオにdfがありません")
+        return None
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    if 'cumulative_returns' in portfolio.df.columns:
+        # ドローダウン計算
+        running_max = portfolio.df['cumulative_returns'].cummax()
+        drawdown = (portfolio.df['cumulative_returns'] / running_max - 1) * 100
+        drawdown.plot(ax=ax)
+        
+        # 最大ドローダウン位置にマーク
+        min_idx = drawdown.idxmin()
+        min_value = drawdown.min()
+        ax.plot(min_idx, min_value, 'ro')
+        ax.text(min_idx, min_value, f'{min_value:.2f}%',
+                verticalalignment='top', horizontalalignment='right')
+    else:
+        logger.warning("cumulative_returns列が見つかりません")
+    
+    ax.set_title('Drawdowns (%)')
+    ax.set_ylabel('Drawdown %')
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=100, bbox_inches='tight')
+    
+    return fig
+
+def plot_monthly_returns(portfolio: SimplePortfolio, save_path: Optional[str] = None) -> plt.Figure:
+    """
+    月次リターンヒートマップをプロット
+
+    Parameters:
+    -----------
+    portfolio : SimplePortfolio
+        バックテスト結果のポートフォリオオブジェクト
+    save_path : str, optional
+        保存先パス
+    
+    Returns:
+    --------
+    plt.Figure
+        プロット図オブジェクト
+    """
+    if not hasattr(portfolio, 'df') or portfolio.df is None:
+        logger.warning("ポートフォリオにdfがありません")
+        return None
+    
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
+    if 'strategy_returns' in portfolio.df.columns:
+        # 戦略リターンを月次で集計
+        returns = portfolio.df['strategy_returns'].copy()
+        
+        # インデックスがdatetimeでない場合は変換をスキップ
+        if not pd.api.types.is_datetime64_any_dtype(returns.index):
+            logger.warning("インデックスがdatetimeタイプではないため、月次リターンヒートマップを作成できません")
+            return None
+            
+        # 月次リターン集計
+        monthly_returns = returns.resample('M').sum() * 100  # パーセント表示
+        
+        try:
+            # 年と月でピボット
+            monthly_returns.index = monthly_returns.index.to_period('M')
+            monthly_pivot = monthly_returns.groupby([monthly_returns.index.year, monthly_returns.index.month]).sum()
+            monthly_pivot = monthly_pivot.unstack(level=1)
+            
+            # ヒートマップで表示
+            sns.heatmap(monthly_pivot, annot=True, fmt=".2f", cmap="RdYlGn",
+                        center=0, linewidths=0.5, cbar_kws={"label": "リターン %"})
+            
+            ax.set_title('Monthly Returns (%)')
+            ax.set_xlabel('Month')
+            ax.set_ylabel('Year')
+            
+            # 月の名前を設定
+            month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+            ax.set_xticklabels(month_names, rotation=45)
+        except Exception as e:
+            logger.error(f"月次リターンヒートマップ作成中にエラー発生: {str(e)}")
+            return None
+    else:
+        logger.warning("strategy_returns列が見つかりません")
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=100, bbox_inches='tight')
+    
+    return fig
+
+def plot_summary_table(portfolio: SimplePortfolio, interval: str = "15m",
+                      save_path: Optional[str] = None) -> plt.Figure:
+    """
+    サマリーテーブルをプロット
+
+    Parameters:
+    -----------
+    portfolio : SimplePortfolio
+        バックテスト結果のポートフォリオオブジェクト
+    interval : str
+        時間枠
+    save_path : str, optional
+        保存先パス
+    
+    Returns:
+    --------
+    plt.Figure
+        プロット図オブジェクト
+    """
+    stats = portfolio.stats().copy()
+    
+    # テーブルデータの準備
+    table_data = []
+    
+    # 基本情報
+    table_data.append(["時間枠", interval])
+    
+    # バックテスト期間の表示（インデックスの型によって処理を分ける）
+    if hasattr(portfolio, 'df') and len(portfolio.df) > 0:
+        start_idx = portfolio.df.index[0]
+        end_idx = portfolio.df.index[-1]
+        
+        # datetime型の場合はフォーマット
+        if pd.api.types.is_datetime64_any_dtype(portfolio.df.index):
+            start_str = start_idx.strftime('%Y-%m-%d')
+            end_str = end_idx.strftime('%Y-%m-%d')
+        else:
+            start_str = str(start_idx)
+            end_str = str(end_idx)
+            
+        table_data.append(["バックテスト期間", f"{start_str} - {end_str}"])
+    
+    # パフォーマンス指標
+    if "Total Return [%]" in stats:
+        table_data.append(["総リターン", f"{stats['Total Return [%]']:.2f}%"])
+    if "Annual Return [%]" in stats:
+        table_data.append(["年間リターン", f"{stats['Annual Return [%]']:.2f}%"])
+    if "Sharpe Ratio" in stats:
+        table_data.append(["シャープレシオ", f"{stats['Sharpe Ratio']:.2f}"])
+    if "Max Drawdown [%]" in stats:
+        table_data.append(["最大ドローダウン", f"{stats['Max Drawdown [%]']:.2f}%"])
+    
+    # トレード統計
+    if hasattr(portfolio, 'df') and 'signal' in portfolio.df.columns:
+        # シグナルからポジション変化を計算
+        signals = portfolio.df['signal'].fillna(0)
+        position_changes = signals.diff().fillna(0).abs()
+        num_trades = position_changes[position_changes > 0].count()
+        
+        # Win率計算 (signal=1のときの次期リターンが正ならWin)
+        if 'strategy_returns' in portfolio.df.columns:
+            wins = ((signals == 1) & (portfolio.df['strategy_returns'].shift(-1) > 0)).sum()
+            losses = ((signals == 1) & (portfolio.df['strategy_returns'].shift(-1) <= 0)).sum()
+            win_rate = wins / (wins + losses) if (wins + losses) > 0 else 0
+            table_data.append(["トレード回数", f"{num_trades}"])
+            table_data.append(["勝率", f"{win_rate:.2%} ({wins}/{wins+losses})"])
+    
+    # figureの準備
+    fig, ax = plt.subplots(figsize=(8, len(table_data) * 0.5 + 1))
+    ax.axis('tight')
+    ax.axis('off')
+    
+    # カラーマップの設定
+    colors = [['#f0f0f0', '#f0f0f0']] * len(table_data)
+    
+    # テーブルの作成
+    table = ax.table(
+        cellText=table_data,
+        colWidths=[0.4, 0.6],
+        cellLoc='left',
         loc='center',
-        colWidths=[0.4, 0.4]
+        cellColours=colors
     )
     
-    # テーブルのスタイル設定
+    # テーブルスタイル調整
     table.auto_set_font_size(False)
-    table.set_fontsize(12)
-    table.scale(1.2, 1.5)
+    table.set_fontsize(10)
+    table.scale(1, 1.5)
     
-    # タイトル
-    plt.title(f'{interval} 時間枠 パフォーマンスサマリー', fontsize=16, y=0.8)
+    # タイトル設定
+    ax.set_title(f'バックテスト結果サマリー ({interval})', fontsize=14, pad=20)
     
-    # 保存
-    plot_path = os.path.join(output_dir, f'{interval}_summary_table.png')
     plt.tight_layout()
-    plt.savefig(plot_path, bbox_inches='tight')
-    logger.info(f"サマリーテーブル保存: {plot_path}")
-    plt.close()
-
-def plot_signals_distribution(portfolio, interval, output_dir):
-    """シグナルの分布を円グラフでプロット (可能な場合)"""
-    # ポートフォリオデータフレーム取得
-    df = portfolio.df.copy()
     
-    # シグナルカラムが存在するか確認
-    if 'signal' in df.columns:
-        plt.figure(figsize=(10, 8))
+    if save_path:
+        plt.savefig(save_path, dpi=100, bbox_inches='tight')
+    
+    return fig
+
+def generate_all_plots(portfolio: SimplePortfolio, interval: str = "15m",
+                      save_dir: Optional[str] = None) -> Dict[str, plt.Figure]:
+    """
+    すべてのプロットを生成
+
+    Parameters:
+    -----------
+    portfolio : SimplePortfolio
+        バックテスト結果のポートフォリオオブジェクト
+    interval : str
+        時間枠
+    save_dir : str, optional
+        保存先ディレクトリ
+    
+    Returns:
+    --------
+    Dict[str, plt.Figure]
+        プロット図オブジェクトの辞書
+    """
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+    
+    plots = {}
+    
+    # リターン曲線 (通常版)
+    returns_path = os.path.join(save_dir, f"{interval}_returns.png") if save_dir else None
+    plots['returns'] = plot_returns(portfolio, returns_path)
+    
+    # リターン曲線 (BTC価格付き)
+    returns_btc_path = os.path.join(save_dir, f"{interval}_returns_with_btc.png") if save_dir else None
+    plots['returns_with_btc'] = plot_returns_with_btc(portfolio, returns_btc_path)
+    
+    # ドローダウン曲線
+    drawdowns_path = os.path.join(save_dir, f"{interval}_drawdowns.png") if save_dir else None
+    plots['drawdowns'] = plot_drawdowns(portfolio, drawdowns_path)
+    
+    # 月次リターン
+    monthly_returns_path = os.path.join(save_dir, f"{interval}_monthly_returns.png") if save_dir else None
+    plots['monthly_returns'] = plot_monthly_returns(portfolio, monthly_returns_path)
+    
+    # サマリーテーブル
+    summary_table_path = os.path.join(save_dir, f"{interval}_summary_table.png") if save_dir else None
+    plots['summary_table'] = plot_summary_table(portfolio, interval, summary_table_path)
+    
+    # シグナル分布
+    if hasattr(portfolio, 'df') and 'signal' in portfolio.df.columns and 'pred_proba' in portfolio.df.columns:
+        fig, ax = plt.subplots(figsize=(10, 6))
         
-        # シグナルの分布を計算
-        signal_counts = df['signal'].value_counts()
+        # シグナルごとに色分け
+        colors = {1: 'green', -1: 'red', 0: 'blue'}
         
-        # シグナルを分かりやすいラベルに変換
-        signal_map = {1: 'ロング', -1: 'ショート', 0: 'ニュートラル'}
-        signal_counts.index = [signal_map.get(s, str(s)) for s in signal_counts.index]
+        for signal, group in portfolio.df.groupby('signal'):
+            ax.hist(group['pred_proba'], bins=50, alpha=0.5, 
+                   label=f"Signal={signal}", color=colors.get(signal, 'gray'))
         
-        # 色の設定
-        colors = ['#2ca02c', '#d62728', '#7f7f7f']
-        
-        # 円グラフ作成
-        plt.pie(signal_counts, labels=signal_counts.index, autopct='%1.1f%%',
-                startangle=90, colors=colors, explode=[0.05] * len(signal_counts))
-        
-        plt.axis('equal')  # 円を円形に保つ
-        plt.title(f'{interval} 時間枠 シグナル分布', fontsize=16)
-        
-        # 保存
-        plot_path = os.path.join(output_dir, f'{interval}_signal_distribution.png')
+        ax.set_title('Signal Distribution')
+        ax.set_xlabel('Prediction Probability')
+        ax.set_ylabel('Count')
+        ax.legend()
         plt.tight_layout()
-        plt.savefig(plot_path)
-        logger.info(f"シグナル分布プロット保存: {plot_path}")
-        plt.close()
+        
+        if save_dir:
+            signal_dist_path = os.path.join(save_dir, f"{interval}_signal_distribution.png")
+            plt.savefig(signal_dist_path, dpi=100, bbox_inches='tight')
+            plots['signal_distribution'] = fig
+        else:
+            plots['signal_distribution'] = fig
+    
+    logger.info(f"{len(plots)}個のプロットを生成しました" +
+               (f", 保存先: {save_dir}" if save_dir else ""))
+    
+    return plots
 
-def generate_all_plots(portfolio, interval, output_dir):
-    """すべてのプロットを生成"""
-    # 出力ディレクトリ作成
-    os.makedirs(output_dir, exist_ok=True)
-    
-    try:
-        # リターン曲線
-        plot_returns(portfolio, interval, output_dir)
-        
-        # ドローダウン
-        plot_drawdowns(portfolio, interval, output_dir)
-        
-        # 月次リターンヒートマップ
-        try:
-            plot_monthly_returns(portfolio, interval, output_dir)
-        except Exception as e:
-            logger.error(f"月次リターンプロット生成エラー: {e}")
-        
-        # サマリーテーブル
-        plot_summary_table(portfolio, interval, output_dir)
-        
-        # シグナル分布 (可能な場合)
-        try:
-            plot_signals_distribution(portfolio, interval, output_dir)
-        except Exception as e:
-            logger.error(f"シグナル分布プロット生成エラー: {e}")
-            
-    except Exception as e:
-        logger.error(f"プロット生成エラー: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+def load_portfolio_and_generate_plots(interval: str, timestamp: Optional[str] = None) -> Tuple[SimplePortfolio, Dict[str, plt.Figure]]:
+    """
+    ポートフォリオをロードしてプロットを生成する
 
-def main():
-    """メイン関数"""
-    import argparse
+    Parameters:
+    -----------
+    interval : str
+        時間枠
+    timestamp : str, optional
+        タイムスタンプディレクトリ (省略時は最新)
+        
+    Returns:
+    --------
+    Tuple[SimplePortfolio, Dict[str, plt.Figure]]
+        ポートフォリオとプロット図のタプル
+    """
+    # プロジェクトルートディレクトリ
+    root_dir = Path(os.path.dirname(os.path.abspath(__file__))).parent
+    reports_dir = root_dir / 'reports'
     
-    parser = argparse.ArgumentParser(description='バックテスト結果をグラフ化して保存するツール')
-    parser.add_argument('--interval', '-i', type=str, help='時間枠 (15m, 1h, 2h など)')
-    parser.add_argument('--file', '-f', type=str, help='特定のファイルを指定 (省略時は最新)')
-    parser.add_argument('--output-dir', '-o', type=str, default=str(app_home / 'reports' / 'plots'),
-                        help='プロットの保存先ディレクトリ')
-    parser.add_argument('--all', '-a', action='store_true', help='すべての時間枠の結果を処理')
-    args = parser.parse_args()
-    
-    # プロットのスタイル設定
-    setup_plot_style()
-    
-    if args.all:
-        # すべての時間枠を処理
-        intervals = ['15m', '2h']
-        for interval in intervals:
-            logger.info(f"時間枠 {interval} の処理開始")
-            process_interval(interval, args.file, args.output_dir)
-    else:
-        # 指定された時間枠のみ処理
-        if args.interval is None:
-            logger.error("エラー: --interval引数または--all引数を指定してください。")
-            parser.print_help()
-            return 1
-        process_interval(args.interval, args.file, args.output_dir)
-    
-    return 0
-
-def process_interval(interval, file=None, output_dir=None):
-    """指定された時間枠のバックテスト結果を処理"""
     # レポートディレクトリ
-    reports_dir = app_home / 'reports' / interval
+    interval_dir = reports_dir / interval
     
-    if not os.path.exists(reports_dir):
-        logger.error(f"レポートディレクトリが見つかりません: {reports_dir}")
-        return
+    if not interval_dir.exists():
+        logger.error(f"レポートディレクトリが見つかりません: {interval_dir}")
+        return None, {}
     
-    # バックテスト結果ファイルを検索
-    if file:
-        file_path = os.path.join(reports_dir, file)
-        if not os.path.exists(file_path):
-            logger.error(f"指定されたファイルが見つかりません: {file_path}")
-            return
-        portfolio_files = [file_path]
+    # タイムスタンプディレクトリを検索
+    if timestamp:
+        target_dir = interval_dir / timestamp
+        if not target_dir.exists():
+            logger.error(f"指定されたタイムスタンプディレクトリが見つかりません: {target_dir}")
+            return None, {}
     else:
-        portfolio_files = sorted(list(reports_dir.glob("backtest_portfolio_*.pkl")))
-        if not portfolio_files:
-            logger.error(f"バックテスト結果ファイルが見つかりません: {reports_dir}")
-            return
-        # 最新のファイルを使用
-        file_path = portfolio_files[-1]
+        # 最新のタイムスタンプディレクトリを探す
+        timestamp_dirs = [d for d in interval_dir.iterdir() if d.is_dir()]
+        if not timestamp_dirs:
+            # タイムスタンプディレクトリがない場合は、直接ポートフォリオファイルを探す
+            portfolio_file = interval_dir / "backtest_portfolio.pkl"
+        else:
+            # 最新のディレクトリを使用
+            target_dir = sorted(timestamp_dirs)[-1]
+            portfolio_file = target_dir / "backtest_portfolio.pkl"
     
-    logger.info(f"バックテスト結果ファイル: {file_path}")
+    # ポートフォリオファイル探索
+    if 'portfolio_file' not in locals():
+        # まずはタイムスタンプディレクトリでポートフォリオファイルを探す
+        portfolio_files = list(target_dir.glob("*portfolio*.pkl"))
+        if portfolio_files:
+            portfolio_file = portfolio_files[0]
+        else:
+            # 見つからない場合は親ディレクトリで探す
+            portfolio_files = list(interval_dir.glob("*portfolio*.pkl"))
+            if portfolio_files:
+                portfolio_file = portfolio_files[0]
+            else:
+                logger.error("ポートフォリオファイルが見つかりません")
+                return None, {}
     
-    # ポートフォリオを読み込む
-    portfolio = load_portfolio(file_path)
-    if portfolio is None:
-        return
+    # ポートフォリオをロード
+    try:
+        with open(portfolio_file, 'rb') as f:
+            portfolio = pickle.load(f)
+        logger.info(f"ポートフォリオをロード: {portfolio_file}")
+    except Exception as e:
+        logger.error(f"ポートフォリオのロード中にエラー発生: {str(e)}")
+        return None, {}
     
-    # プロットを生成して保存
-    if output_dir is None:
-        output_dir = app_home / 'reports' / 'plots'
+    # 保存先ディレクトリの設定
+    save_dir = interval_dir / "plots"
+    os.makedirs(save_dir, exist_ok=True)
     
-    generate_all_plots(portfolio, interval, output_dir)
-    logger.info(f"時間枠 {interval} のプロット生成完了")
+    # プロット生成
+    plots = generate_all_plots(portfolio, interval, str(save_dir))
+    
+    return portfolio, plots
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # ロギング設定
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # コマンドライン引数解析
+    import argparse
+    parser = argparse.ArgumentParser(description='バックテスト結果プロット生成')
+    parser.add_argument('--interval', '-i', type=str, required=True, help='時間枠 (例: 15m, 2h)')
+    parser.add_argument('--timestamp', '-t', type=str, help='タイムスタンプ (省略時は最新)')
+    args = parser.parse_args()
+    
+    # プロット生成実行
+    portfolio, plots = load_portfolio_and_generate_plots(args.interval, args.timestamp)
+    
+    if portfolio is not None:
+        logger.info(f"{args.interval}の{len(plots)}個のプロットを生成しました")
+    else:
+        logger.error("プロット生成に失敗しました")

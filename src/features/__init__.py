@@ -5,8 +5,8 @@ This package contains modules for generating features from raw data,
 normalizing them, and preparing them for model training.
 """
 
-from .builders import (
-    FeatureBuilder,
+from .builders import FeatureBuilder
+from .feature_functions import (
     zscore_normalize,
     build_price_features,
     build_oi_features,

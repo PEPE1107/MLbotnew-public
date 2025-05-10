@@ -36,14 +36,14 @@ logger = logging.getLogger('data.coinglass')
 
 # Coinglass API endpoint definitions
 ENDPOINTS = {
-    'price': 'futures/btc/market/candles',           # Price data
-    'oi': 'futures/btc/openInterest/history',        # Open Interest
-    'funding': 'futures/funding-rates/history',      # Funding rates
-    'liq': 'futures/liquidation/history',            # Liquidation data
-    'lsr': 'futures/longShortRatio',                 # Long/Short ratio
-    'taker': 'futures/takerVolume',                  # Taker volume
-    'orderbook': 'futures/orderBook/ratio',          # Orderbook
-    'premium': 'futures/premiumIndex'                # Premium index
+    'price': 'price/ohlc-history',                                # Price data
+    'oi': 'futures/openInterest/ohlc-aggregated-history',         # Open Interest
+    'funding': 'futures/fundingRate/oi-weight-ohlc-history',      # Funding rates
+    'liq': 'futures/liquidation/v3/aggregated-history',           # Liquidation data
+    'lsr': 'futures/topLongShortAccountRatio/history',            # Long/Short ratio
+    'taker': 'spot/takerBuySellVolume/history',                   # Taker volume
+    'orderbook': 'spot/orderbook/aggregated-history',             # Orderbook
+    'premium': 'coinbase-premium-index'                           # Premium index
 }
 
 
@@ -138,10 +138,10 @@ class CoinglassClient:
         if key is None:
             key = endpoint
             
-        url = f"https://api.coinglass.com/api/v3/{ENDPOINTS[key]}"
+        url = f"https://open-api-v3.coinglass.com/api/{ENDPOINTS[key]}"
         headers = {
             "accept": "application/json",
-            "coinglassSecret": self.api_key
+            "CG-API-KEY": self.api_key
         }
         
         try:
@@ -210,7 +210,24 @@ class CoinglassClient:
                     filtered_data.append(item)
             return pd.DataFrame(filtered_data)
         
-        elif endpoint in ['liq', 'lsr', 'taker', 'orderbook', 'premium']:
+        elif endpoint == 'taker':
+            # Takerデータの処理 - 文字列を数値に変換
+            processed_data = []
+            for item in data:
+                # 文字列から数値への変換を確実に行う
+                processed_item = {}
+                for key, value in item.items():
+                    if key in ['buy', 'sell'] and isinstance(value, str):
+                        try:
+                            processed_item[key] = float(value)
+                        except (ValueError, TypeError):
+                            processed_item[key] = 0.0  # 変換できない場合は0をセット
+                    else:
+                        processed_item[key] = value
+                processed_data.append(processed_item)
+            return pd.DataFrame(processed_data)
+        
+        elif endpoint in ['liq', 'lsr', 'orderbook', 'premium']:
             # Process other endpoints (generic)
             return pd.DataFrame(data)
         
@@ -380,27 +397,69 @@ class CoinglassClient:
                 start_time = end_time - timedelta(days=days * limit)
             else:
                 raise ValueError(f"Unsupported interval: {interval}")
-                
-        # Convert to Unix timestamp (milliseconds)
-        start_ts = int(start_time.timestamp() * 1000)
-        end_ts = int(end_time.timestamp() * 1000)
         
         logger.info(f"Starting data download: {interval}, from {start_time} to {end_time}")
         self.send_slack_message(f"Starting data download: {interval}", emoji=":rocket:")
+        
+        # 時間足の特殊処理 (h2, d1形式への変換)
+        h_format = interval.replace('2h', 'h2').replace('4h', 'h4').replace('1d', 'd1')
+        
+        # エンドポイント別パラメータ設定
+        endpoint_params = {
+            'price': {
+                'exchange': 'Binance',
+                'symbol': 'BTCUSDT',
+                'type': 'futures',
+                'interval': interval,
+                'limit': limit
+            },
+            'oi': {
+                'symbol': 'BTC',
+                'interval': interval,
+                'limit': limit
+            },
+            'funding': {
+                'symbol': 'BTC',
+                'interval': interval,
+                'limit': limit
+            },
+            'liq': {
+                'exchanges': 'ALL',
+                'symbol': 'BTC',
+                'interval': interval,
+                'limit': limit
+            },
+            'lsr': {
+                'exchange': 'Binance',
+                'symbol': 'BTCUSDT',
+                'interval': h_format,
+                'limit': limit
+            },
+            'taker': {
+                'exchange': 'Binance',
+                'symbol': 'BTCUSDT',
+                'interval': h_format,
+                'limit': limit
+            },
+            'orderbook': {
+                'exchanges': 'Binance',
+                'symbol': 'BTC',
+                'interval': interval.replace('2h', 'h1'),
+                'limit': limit
+            },
+            'premium': {
+                'interval': interval,
+                'limit': limit
+            }
+        }
         
         # Fetch from all endpoints
         for endpoint in ENDPOINTS:
             try:
                 logger.info(f"Processing endpoint: {endpoint}, timeframe: {interval}")
                 
-                # Set endpoint-specific parameters
-                params = {
-                    'symbol': 'BTC',
-                    'interval': interval,
-                    'from': start_ts,
-                    'to': end_ts,
-                    'limit': limit
-                }
+                # エンドポイント別のパラメータを取得
+                params = endpoint_params.get(endpoint, {})
                 
                 df = self.fetch(endpoint, params)
                 

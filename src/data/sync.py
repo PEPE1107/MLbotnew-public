@@ -24,6 +24,8 @@ from typing import Dict, Any, List, Union, Optional, Tuple
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, project_root)
 
+from src.data.coinglass import CoinglassClient, ENDPOINTS as COINGLASS_ENDPOINTS
+
 # ロギング設定
 logging.basicConfig(
     level=logging.INFO,
@@ -37,7 +39,7 @@ class DataSync:
     外部APIからBTC価格データ、OI、ファンディングレートなどを取得
     """
     
-    def __init__(self, api_key_file: str = None, use_cache: bool = True):
+    def __init__(self, api_key_file: str = None, use_cache: bool = True, use_coinglass: bool = True):
         """
         初期化
         
@@ -47,9 +49,12 @@ class DataSync:
             API鍵を含むYAMLファイルのパス
         use_cache : bool
             キャッシュを使用するかどうか
+        use_coinglass : bool
+            Coinglassデータを使用するかどうか
         """
         self.data_dir = os.path.join(project_root, 'data')
         self.use_cache = use_cache
+        self.use_coinglass = use_coinglass
         
         # データディレクトリが存在しない場合は作成
         if not os.path.exists(self.data_dir):
@@ -64,6 +69,14 @@ class DataSync:
                 logger.info("API鍵を読み込みました")
             except Exception as e:
                 logger.warning(f"API鍵の読み込みに失敗しました: {e}")
+        
+        # Coinglassクライアントの初期化
+        self.coinglass_client = None
+        if use_coinglass and 'coinglass' in self.api_keys:
+            self.coinglass_client = CoinglassClient(self.api_keys['coinglass'])
+            logger.info("Coinglassクライアントを初期化しました")
+        elif use_coinglass:
+            logger.warning("CoinglassのAPIキーが設定されていません。API_KEYSファイルを確認してください。")
         
         # 時間枠設定を読み込む
         self.intervals_config = self._load_config('intervals')
@@ -483,6 +496,36 @@ class DataSync:
         logger.info(f"サンプルデータを生成しました: {len(df)}行")
         return df
     
+    def _convert_interval_format(self, interval: str, endpoint_type: str = 'default') -> str:
+        """
+        時間枠フォーマットを変換（Coinglass API用）
+        
+        Parameters:
+        -----------
+        interval : str
+            元の時間枠形式 (例: '15m', '2h', '1d')
+        endpoint_type : str
+            エンドポイントのタイプ ('lsr'など特殊フォーマットが必要なエンドポイント用)
+            
+        Returns:
+        --------
+        str
+            変換後の時間枠形式
+        """
+        # LSRエンドポイント用の特殊フォーマット (h2, m15など)
+        if endpoint_type == 'lsr':
+            if interval == '15m':
+                return 'm15'
+            elif interval == '2h':
+                return 'h2'
+            elif interval == '1d':
+                return 'd1'
+            # そのまま返す
+            return interval
+            
+        # 標準フォーマット (2h, 15mなど)
+        return interval
+    
     def fetch_funding_rate(self, symbol: str = 'BTC-USD', interval: str = '8h', 
                           limit: int = 90) -> pd.DataFrame:
         """
@@ -502,9 +545,37 @@ class DataSync:
         pd.DataFrame
             ファンディングレートデータ
         """
-        # TODO: 将来的に実際のAPIから取得する実装に置き換え
+        # Coinglassクライアントが利用可能ならそれを使用
+        if self.use_coinglass and self.coinglass_client:
+            # シンボル名をBTCの形式に変換
+            coinglass_symbol = symbol.split('-')[0]
+            
+            try:
+                # Coinglassからファンディングレートを取得
+                funding_params = {
+                    'symbol': coinglass_symbol,
+                    'interval': self._convert_interval_format(interval),
+                    'limit': limit
+                }
+                
+                funding_df = self.coinglass_client.fetch('funding', funding_params)
+                
+                # カラム名を標準化
+                if 'funding_o' in funding_df.columns:
+                    funding_df = funding_df.rename(columns={
+                        'funding_o': 'funding_rate_open',
+                        'funding_h': 'funding_rate_high',
+                        'funding_l': 'funding_rate_low',
+                        'funding_c': 'funding_rate'
+                    })
+                
+                logger.info(f"Coinglassからファンディングレートデータを取得しました: {len(funding_df)}行")
+                return funding_df
+                
+            except Exception as e:
+                logger.warning(f"Coinglassからのファンディングレート取得に失敗しました: {e}")
         
-        # サンプルデータ生成
+        # Coinglassが使えない場合はシミュレーションデータを生成
         price_data = self.fetch_price_data(symbol, interval, limit)
         
         # 価格データに基づいてファンディングレートをシミュレート
@@ -533,9 +604,102 @@ class DataSync:
         pd.DataFrame
             未決済建玉データ
         """
-        # TODO: 将来的に実際のAPIから取得する実装に置き換え
+        # Coinglassクライアントが利用可能ならそれを使用
+        if self.use_coinglass and self.coinglass_client:
+            # シンボル名をBTCの形式に変換
+            coinglass_symbol = symbol.split('-')[0]
+            
+            try:
+                # Coinglassから未決済建玉データを取得
+                oi_params = {
+                    'symbol': coinglass_symbol,
+                    'interval': self._convert_interval_format(interval),
+                    'limit': limit
+                }
+                
+                oi_df = self.coinglass_client.fetch('oi', oi_params)
+                
+                # カラム名を標準化
+                if 'oi_o' in oi_df.columns:
+                    oi_df = oi_df.rename(columns={
+                        'oi_o': 'open_interest_open',
+                        'oi_h': 'open_interest_high',
+                        'oi_l': 'open_interest_low',
+                        'oi_c': 'open_interest'
+                    })
+                
+                # 追加の需給データを取得
+                try:
+                    # 清算データ
+                    liq_params = {
+                        'exchanges': 'ALL',
+                        'symbol': coinglass_symbol,
+                        'interval': self._convert_interval_format(interval),
+                        'limit': limit
+                    }
+                    liq_df = self.coinglass_client.fetch('liq', liq_params)
+                    
+                    # ロングショート比率
+                    ls_params = {
+                        'exchange': 'Binance',
+                        'symbol': f"{coinglass_symbol}USDT",
+                        'interval': self._convert_interval_format(interval, 'lsr'),
+                        'limit': limit
+                    }
+                    ls_df = self.coinglass_client.fetch('lsr', ls_params)
+                    
+                    # テイカー買い/売りボリューム
+                    taker_params = {
+                        'exchange': 'Binance',
+                        'symbol': f"{coinglass_symbol}USDT",
+                        'interval': self._convert_interval_format(interval, 'lsr'),
+                        'limit': limit
+                    }
+                    taker_df = self.coinglass_client.fetch('taker', taker_params)
+                    
+                    # プレミアム指数
+                    premium_params = {
+                        'interval': self._convert_interval_format(interval),
+                        'limit': limit
+                    }
+                    premium_df = self.coinglass_client.fetch('premium', premium_params)
+                    
+                    # マージ処理
+                    if liq_df is not None and not liq_df.empty:
+                        if not oi_df.empty:
+                            oi_df = oi_df.join(liq_df, how='left')
+                        else:
+                            oi_df = liq_df
+                    
+                    if ls_df is not None and not ls_df.empty:
+                        if not oi_df.empty:
+                            oi_df = oi_df.join(ls_df, how='left')
+                        else:
+                            oi_df = ls_df
+                    
+                    if taker_df is not None and not taker_df.empty:
+                        if not oi_df.empty:
+                            oi_df = oi_df.join(taker_df, how='left')
+                        else:
+                            oi_df = taker_df
+                    
+                    if premium_df is not None and not premium_df.empty:
+                        if not oi_df.empty:
+                            oi_df = oi_df.join(premium_df, how='left')
+                        else:
+                            oi_df = premium_df
+                
+                except Exception as e:
+                    logger.warning(f"追加の需給データ取得に失敗しました: {e}")
+                
+                if not oi_df.empty:
+                    logger.info(f"Coinglassから未決済建玉データを取得しました: {len(oi_df)}行")
+                    return oi_df
+                
+            except Exception as e:
+                logger.warning(f"Coinglassからの未決済建玉データ取得に失敗しました: {e}")
         
-        # サンプルデータ生成
+        # Coinglassが使えない場合はシミュレーションデータを生成
         price_data = self.fetch_price_data(symbol, interval, limit)
         
         # 価格データに基づいてOIをシミュレート

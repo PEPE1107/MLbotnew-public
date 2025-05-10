@@ -1,0 +1,93 @@
+# MLbotnew モデル設定
+# 機械学習モデルのパラメータと設定
+
+# モデルバージョン管理
+model_version: "2025.05.09"  # モデルバージョン
+production_model: "mlbotnew_v1"  # 本番運用モデル名
+
+# マルチタイムフレーム二段モデル
+models:
+  # 方向予測モデル (classification)
+  direction:
+    type: "LightGBM"
+    params:
+      objective: "binary"
+      metric: "auc"
+      boosting: "gbdt"
+      num_leaves: 32
+      learning_rate: 0.05
+      feature_fraction: 0.8
+      bagging_fraction: 0.8
+      bagging_freq: 5
+      verbose: -1
+    # トレーニング設定
+    training:
+      test_size: 0.3
+      val_size: 0.2
+      cv_folds: 5
+      early_stopping_rounds: 30
+      target_col: "direction"  # 0/1のバイナリ方向
+    # 特徴量設定
+    features:
+      - "trend_flag"  # 日足のトレンドフラグ
+      - "funding_rate"
+      - "oi_change"
+      - "liquidation"
+      - "long_short_ratio"
+      - "premium_index"
+      - "rsi_14"
+      - "sma_ratio_20_50"
+      - "ema_ratio_12_26"
+      - "atr_14"
+      - "bb_width_20"
+      - "volume_change"
+  
+  # リターン予測モデル (regression)
+  returns:
+    type: "CatBoost"
+    params:
+      loss_function: "RMSE"
+      eval_metric: "RMSE"
+      iterations: 1000
+      learning_rate: 0.03
+      depth: 6
+      random_strength: 1.0
+      verbose: False
+    # トレーニング設定
+    training:
+      test_size: 0.3
+      val_size: 0.2
+      cv_folds: 5
+      early_stopping_rounds: 50
+      target_col: "future_return_5"  # 5期間先のリターン
+    # 特徴量設定（方向モデルと同じ特徴量セット）
+    features:
+      - "trend_flag"
+      - "funding_rate"
+      - "oi_change"
+      - "liquidation"
+      - "long_short_ratio"
+      - "premium_index"
+      - "rsi_14"
+      - "sma_ratio_20_50"
+      - "ema_ratio_12_26"
+      - "atr_14"
+      - "bb_width_20"
+      - "volume_change"
+
+# ハイパーパラメータチューニング設定
+tuning:
+  n_trials: 50
+  cv_folds: 3
+  timeout: 3600  # 1時間
+  direction: "maximize"
+  metric: "sharpe_ratio"  # バックテストシャープレシオでチューニング
+
+# ポジションサイジング
+position_sizing:
+  method: "risk_parity"  # リスクパリティに基づくポジションサイズ計算
+  formula: "beta = proba * mu / var95"  # ポジションサイズβの計算式
+  max_position: 1.0  # 最大ポジションサイズ（1 = 100%）
+  var_window: 20     # VaR計算ウィンドウサイズ
+  var_percentile: 95 # VaRパーセンタイル
+  min_proba: 0.55    # エントリーの最小確率閾値
