@@ -1,24 +1,16 @@
-# MLbotnew 時間枠設定
-# Coinglassデータを使った2時間足戦略
-
-# 基本時間枠定義
-hour: 2h    # 2時間足（メイン時間枠）
-
-# バックテスト実行対象の時間枠
 backtest_intervals:
-  - 2h   # メインバックテスト時間枠
-
-# データ取得範囲設定
+- 2h
 data_lookback:
-  2h: 360    # 2時間足：360日分（limit=4320に対応）
-
-# 取得するデータタイプ
+  2h: 360
 data_types:
-  - price    # 価格OHLC
-  - funding  # ファンディングレート
-  - oi       # オープンインタレスト
-  - liq      # 清算データ
-  - lsr      # ロング/ショート比率
-  - taker    # Takerバイ/セルボリューム
-  - orderbook # オーダーブック
-  - premium  # Coinbaseプレミアム指数
+- price
+- funding
+- oi
+- liq
+- lsr
+- taker
+- orderbook
+- premium
+day: 2h
+hour: 2h
+minute: 2h

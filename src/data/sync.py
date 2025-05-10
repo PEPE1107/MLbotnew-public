@@ -986,6 +986,42 @@ class DataSync:
         # 日数からレコード数に変換
         records = limit * records_per_day.get(interval, 12)
         
+        # まず、新しい統合parquetファイルがあるか確認
+        features_dir = os.path.join(project_root, 'data', interval, 'features')
+        if os.path.exists(features_dir):
+            parquet_files = [f for f in os.listdir(features_dir) if f.startswith('merged_') and f.endswith('.parquet')]
+            if parquet_files:
+                # 最新のparquetファイルを使用
+                latest_file = sorted(parquet_files)[-1]
+                parquet_path = os.path.join(features_dir, latest_file)
+                
+                try:
+                    data = pd.read_parquet(parquet_path)
+                    logger.info(f"統合parquetファイルからデータを読み込みました: {parquet_path} (レコード数: {len(data)})")
+                    
+                    # 列名を標準化
+                    if 'timestamp' in data.columns:
+                        data = data.set_index('timestamp')
+                    
+                    # 必要なOHLCV列が存在するか確認
+                    if all(col in data.columns for col in ['open', 'high', 'low', 'close', 'volume']):
+                        # 需給指標にshift(1)を適用（ラグを考慮）
+                        indicator_cols = [col for col in data.columns if 
+                                         any(name in col for name in ['funding', 'oi', 'liquidation', 
+                                                                     'long_short_ratio', 'premium', 
+                                                                     'lsr', 'taker'])]
+                        for col in indicator_cols:
+                            data[col] = data[col].shift(1)
+                        
+                        logger.info(f"需給指標を追加し、shift(1)を適用しました")
+                        logger.info(f"{interval}データ取得完了: {len(data)}行 x {len(data.columns)}列")
+                        return data
+                    else:
+                        logger.warning(f"必要なOHLCV列が見つかりません: {parquet_path}")
+                except Exception as e:
+                    logger.warning(f"parquetファイルの読み込みに失敗しました: {e}")
+        
+        # 統合ファイルが見つからない場合や読み込みに失敗した場合は従来の方法でデータ取得
         # 価格データを取得
         data = self.fetch_price_data(symbol, interval, records)
         

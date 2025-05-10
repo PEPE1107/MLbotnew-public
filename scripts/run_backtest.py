@@ -242,7 +242,7 @@ def main():
             # 時間枠に応じたデフォルト期間を設定
             days_lookup = {
                 '15m': 30,    # 15分足: 30日
-                '2h': 90,     # 2時間足: 90日
+                '2h': 360,    # 2時間足: 360日（coinglass spec要件）
                 '1d': 365     # 日足: 365日
             }
             days = days_lookup.get(args.interval, 30)
