@@ -46,9 +46,40 @@ def generate_stats(backtest_result: Dict[str, Any]) -> Dict[str, Any]:
     """
     logger.info("バックテスト結果の統計情報を計算中...")
     
-    # VectorBTのポートフォリオオブジェクトを取得
+    # ポートフォリオオブジェクトを取得
     portfolio = backtest_result['portfolio']
     interval = backtest_result['interval']
+    
+    # ポートフォリオがない場合
+    if portfolio is None:
+        logger.warning("ポートフォリオオブジェクトがありません。空の統計を返します。")
+        return {
+            'interval': interval,
+            'total_return': 0,
+            'total_return_pct': 0,
+            'yearly_return_pct': 0,
+            'sharpe_ratio': 0,
+            'sortino_ratio': 0,
+            'calmar_ratio': 0,
+            'max_drawdown': 0,
+            'max_drawdown_pct': 0,
+            'total_trades': 0,
+            'win_rate': 0,
+            'win_rate_pct': 0,
+            'avg_win_pct': 0,
+            'avg_loss_pct': 0,
+            'payoff_ratio': 0,
+            'profit_factor': 0,
+            'positive_months': 0,
+            'negative_months': 0,
+            'avg_monthly_return_pct': 0,
+            'avg_trade_duration': 0,
+            'start_date': '',
+            'end_date': '',
+            'days_in_backtest': 0,
+            'initial_capital': 10000,
+            'final_capital': 10000
+        }
     
     # 年間取引日数を設定（時間枠ごとに異なる）
     if interval == '15m':
@@ -58,37 +89,104 @@ def generate_stats(backtest_result: Dict[str, Any]) -> Dict[str, Any]:
     else:  # 1d
         annual_trading_days = 365  # 日足は年間365日
     
-    # トレード統計
-    trade_stats = portfolio.trades.stats()
-    trade_duration = portfolio.trades.duration.mean() if len(portfolio.trades) > 0 else 0
+    # カスタム実装のSimplePortfolioかどうかを検出
+    is_custom_portfolio = hasattr(portfolio, 'equity') and isinstance(portfolio.equity, pd.Series)
     
-    # 基本的なリターン統計
-    total_return = portfolio.total_return()
-    total_return_pct = portfolio.total_return() * 100
-    
-    # ドローダウン統計
-    drawdown = portfolio.drawdown()
-    max_drawdown = portfolio.max_drawdown()
-    max_drawdown_pct = portfolio.max_drawdown() * 100
-    
-    # リスク調整済みリターン - APIの互換性に対応
-    try:
-        # 新しいバージョン用
+    # SimplePortfolioなら直接メソッドを呼び出す
+    if is_custom_portfolio:
+        logger.info("カスタムポートフォリオを検出しました。直接メソッド呼び出しを使用します。")
+        
+        # トレード統計
+        trade_stats = portfolio.trades.stats() if hasattr(portfolio.trades, 'stats') else {'win_rate': 0, 'count': 0}
+        trade_duration = portfolio.trades.duration.mean() if hasattr(portfolio.trades, 'duration') else 0
+        
+        # 基本的なリターン統計
+        total_return = portfolio.total_return()
+        total_return_pct = portfolio.total_return() * 100
+        
+        # ドローダウン統計
+        drawdown = portfolio.drawdown()
+        max_drawdown = portfolio.max_drawdown()
+        max_drawdown_pct = portfolio.max_drawdown() * 100
+        
+        # リスク調整済みリターン
         sharpe_ratio = portfolio.sharpe_ratio(year_freq=annual_trading_days)
         sortino_ratio = portfolio.sortino_ratio(year_freq=annual_trading_days)
         calmar_ratio = portfolio.calmar_ratio(year_freq=annual_trading_days)
-    except TypeError as e:
-        # 古いバージョン用
+    else:
+        # VectorBTのポートフォリオの場合 - APIの互換性を処理
+        # トレード統計
         try:
-            sharpe_ratio = portfolio.sharpe_ratio(risk_free=0.0, year_freq=annual_trading_days)
-            sortino_ratio = portfolio.sortino_ratio(risk_free=0.0, year_freq=annual_trading_days)
+            trade_stats = portfolio.trades.stats()
+            trade_duration = portfolio.trades.duration.mean() if len(portfolio.trades) > 0 else 0
+        except Exception as e:
+            logger.warning(f"トレード統計取得でエラー: {e}")
+            trade_stats = {'win_rate': 0, 'count': 0}
+            trade_duration = 0
+        
+        # 基本的なリターン統計
+        try:
+            total_return = portfolio.total_return()
+            total_return_pct = portfolio.total_return() * 100
+        except Exception as e:
+            logger.warning(f"リターン計算でエラー: {e}")
+            total_return = 0
+            total_return_pct = 0
+        
+        # ドローダウン統計
+        try:
+            drawdown = portfolio.drawdown()
+            max_drawdown = portfolio.max_drawdown()
+            max_drawdown_pct = portfolio.max_drawdown() * 100
+        except Exception as e:
+            logger.warning(f"ドローダウン計算でエラー: {e}")
+            drawdown = pd.Series([0])
+            max_drawdown = 0
+            max_drawdown_pct = 0
+        
+        # リスク調整済みリターン - APIの互換性に対応
+        try:
+            # VectorBT v0.24+用
+            sharpe_ratio = portfolio.sharpe_ratio(year_freq=annual_trading_days)
+            sortino_ratio = portfolio.sortino_ratio(year_freq=annual_trading_days)
             calmar_ratio = portfolio.calmar_ratio(year_freq=annual_trading_days)
-        except TypeError:
-            # フォールバック - 基本的なパラメータのみ
-            logger.warning("リスク調整済みリターンの計算でフォールバックを使用します")
-            sharpe_ratio = portfolio.sharpe_ratio()
-            sortino_ratio = portfolio.sortino_ratio()
-            calmar_ratio = portfolio.calmar_ratio()
+        except Exception as e1:
+            # 古いバージョン用
+            try:
+                logger.warning(f"最新APIでの計算でエラー: {e1}, 代替メソッドを試行")
+                sharpe_ratio = portfolio.sharpe_ratio(risk_free=0.0, year_freq=annual_trading_days)
+                sortino_ratio = portfolio.sortino_ratio(risk_free=0.0, year_freq=annual_trading_days)
+                calmar_ratio = portfolio.calmar_ratio(year_freq=annual_trading_days)
+            except Exception as e2:
+                # 手動フォールバック
+                logger.warning(f"リスク調整済みリターンの計算でエラー: {e2}, 手動計算を使用")
+                
+                # 手動計算
+                try:
+                    returns = portfolio.returns()
+                    if len(returns) > 1:
+                        ann_factor = np.sqrt(annual_trading_days)
+                        ret_mean = returns.mean()
+                        ret_std = returns.std()
+                        # シャープレシオ
+                        sharpe_ratio = ret_mean / ret_std * ann_factor if ret_std > 0 else 0
+                        
+                        # ソルティノレシオ
+                        downside_returns = returns[returns < 0]
+                        downside_std = downside_returns.std() if len(downside_returns) > 0 else 0.0001
+                        sortino_ratio = ret_mean / downside_std * ann_factor if downside_std > 0 else 0
+                        
+                        # カルマーレシオ
+                        calmar_ratio = total_return / abs(max_drawdown) if abs(max_drawdown) > 0 else 0
+                    else:
+                        sharpe_ratio = 0
+                        sortino_ratio = 0
+                        calmar_ratio = 0
+                except Exception as e3:
+                    logger.warning(f"手動リスク計算でエラー: {e3}")
+                    sharpe_ratio = 0
+                    sortino_ratio = 0
+                    calmar_ratio = 0
     
     # トレード詳細
     total_trades = len(portfolio.trades)
@@ -462,6 +560,49 @@ def generate_stats(backtest_result: Dict[str, Any]) -> Dict[str, Any]:
             # どうしても処理できない値の場合は0にフォールバック
             cleaned_stats[k] = 0
     return cleaned_stats
+
+def calculate_statistics(backtest_result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    バックテスト結果の統計情報を計算する (generate_stats のエイリアス)
+    
+    Parameters:
+    -----------
+    backtest_result : dict
+        run_backtest()の戻り値
+        
+    Returns:
+    --------
+    dict
+        統計情報辞書
+    """
+    return generate_stats(backtest_result)
+
+
+def generate_html_report(backtest_result: Dict[str, Any], html_path: str) -> None:
+    """
+    バックテスト結果のHTMLレポートを生成
+    
+    Parameters:
+    -----------
+    backtest_result : dict
+        run_backtest()の戻り値
+    html_path : str
+        生成するHTMLファイルのパス
+    """
+    # 価格データを取得
+    price_data = backtest_result.get('df', pd.DataFrame())
+    if 'close' not in price_data.columns:
+        logger.error("価格データが見つかりません")
+        return
+    
+    # レポート保存先ディレクトリ
+    report_dir = os.path.dirname(html_path)
+    os.makedirs(report_dir, exist_ok=True)
+    
+    # プロット生成
+    plot_backtest_with_price(backtest_result, price_data, report_dir)
+    logger.info(f"HTMLレポートを生成しました: {html_path}")
+
 
 def plot_backtest_with_price(backtest_result: Dict[str, Any], price_data: pd.DataFrame, 
                            result_dir: str) -> str:

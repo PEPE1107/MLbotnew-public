@@ -1,23 +1,55 @@
-pandas>=2.0.0
-pyarrow>=14.0.0
-requests>=2.31.0
-yarl>=1.9.0
-tqdm>=4.66.0
-lightgbm>=4.1.0
-catboost>=1.2.0
-torch>=2.0.0
-pytorch-forecasting>=1.0.0
-vectorbtpro==0.25.*
-optuna>=3.2.0
-fastapi>=0.100.0
-uvicorn>=0.23.0
-prometheus-client>=0.17.0
-bybit==0.2.*
-websockets>=11.0.0
-duckdb>=0.8.0
-tenacity>=8.2.0
-slack_sdk>=3.23.0
-python-dotenv>=1.0.0
-numpy>=1.24.0
-matplotlib>=3.7.0
-scikit-learn>=1.3.0
+# MLbotnew - 基本要件
+# データ処理
+numpy>=1.22.0
+pandas>=1.5.0
+pyarrow>=8.0.0  # 高速データフォーマット
+
+# データ可視化
+matplotlib>=3.5.0
+seaborn>=0.12.0
+plotly>=5.10.0
+kaleido>=0.2.1  # plotly静的画像出力用
+
+# 機械学習
+scikit-learn>=1.1.0
+lightgbm>=3.3.0
+catboost>=1.1.0
+optuna>=3.0.0  # ハイパーパラメータ最適化
+joblib>=1.2.0  # モデル保存
+
+# 金融・バックテスト
+vectorbt>=0.24.0  # バックテストエンジン
+pandas-ta>=0.3.14b  # テクニカル指標
+ccxt>=2.0.0  # 暗号資産取引所API
+
+# Web関連
+requests>=2.27.0
+aiohttp>=3.8.0  # 非同期HTTP
+fastapi>=0.95.0  # APIサーバー
+uvicorn>=0.20.0  # ASGIサーバー
+
+# データベース
+redis>=4.5.0  # キャッシュ
+pymongo>=4.2.0  # MongoDB
+motor>=3.1.0  # 非同期MongoDB
+
+# 監視・ロギング
+prometheus-client>=0.16.0
+python-json-logger>=2.0.0
+structlog>=23.1.0
+
+# AWS連携
+boto3>=1.26.0
+s3fs>=2023.1.0  # S3をファイルシステムとして扱う
+
+# 開発・テスト
+pytest>=7.3.0
+pytest-cov>=4.0.0
+black>=23.1.0  # フォーマッター
+mypy>=1.2.0  # 型チェック
+isort>=5.12.0  # import順序最適化
+
+# ユーティリティ
+python-dotenv>=1.0.0  # 環境変数
+pyyaml>=6.0  # YAML設定ファイル
+fire>=0.5.0  # コマンドラインインターフェース

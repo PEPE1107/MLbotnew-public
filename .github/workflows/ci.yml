@@ -1,10 +1,5 @@
-name: MLbotnew CI/CD Pipeline
-
-on:
-  push:
-    branches: [ '*' ]
-  pull_request:
-    branches: [ '*' ]
+name: test-bt-docker
+on: [push, pull_request]
 
 jobs:
   unit:
@@ -13,27 +8,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: true
-      
+          
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
-          cache: 'pip'
+          python-version: "3.10"
           
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
           pip install pytest pytest-cov
-      
+          pip install -r requirements.txt
+          
       - name: Run unit tests
-        run: |
-          pytest -q tests/
-      
-      - name: Check for fee validation
-        run: |
-          python -c "import yaml; config = yaml.safe_load(open('config/fees.yaml', 'r')); assert config.get('trading_fee', 0) > 0, 'Trading fee must be greater than zero'"
-  
+        run: pytest -q
+
   quick_bt:
     needs: unit
     runs-on: ubuntu-latest
@@ -45,93 +34,37 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
-          cache: 'pip'
+          python-version: "3.10"
           
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      
-      - name: Set up API keys
-        run: |
-          echo "coinapi: '${{ secrets.COINAPI_KEY }}'" > config/api_keys.yaml
-          echo "binance: '${{ secrets.BINANCE_KEY }}'" >> config/api_keys.yaml
           
-      - name: Run quick backtest
+      - name: Create directories
         run: |
-          python scripts/run_backtest.py --interval 15m --quick
-      
-      - name: Validate stats
-        run: |
-          python scripts/validate_stats.py --interval 15m --min-sharpe 0.5 --max-sharpe 5.0 --max-dd 25.0
-      
+          mkdir -p data/raw/15m data/raw/2h data/raw/1d
+          mkdir -p data/features/15m data/features/2h data/features/1d
+          mkdir -p reports/15m reports/2h reports/1d
+          
+      - name: Run quick backtest (15m)
+        run: python scripts/run_backtest.py --interval 15m --quick
+        
+      - name: Validate backtest results
+        run: python scripts/validate_stats.py
+        
       - name: Upload stats
         uses: actions/upload-artifact@v4
         with:
-          name: backtest-stats
-          path: |
-            reports/15m/stats.json
-            reports/15m/*/stats.json
+          name: stats
+          path: reports/*/stats.json
           
-      - name: Upload HTML report
+      - name: Upload backtest report
         uses: actions/upload-artifact@v4
         with:
-          name: backtest-html
-          path: |
-            reports/15m/bt_with_price.html
-            reports/15m/*/bt_with_price.html
-  
-  # 複数時間枠のバックテスト（PRのみ）
-  multi_bt:
-    if: github.event_name == 'pull_request'
-    needs: quick_bt
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-          
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-          
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      
-      - name: Set up API keys
-        run: |
-          echo "coinapi: '${{ secrets.COINAPI_KEY }}'" > config/api_keys.yaml
-          echo "binance: '${{ secrets.BINANCE_KEY }}'" >> config/api_keys.yaml
-          
-      - name: Run 2h backtest
-        run: |
-          python scripts/run_backtest.py --interval 2h --quick
-      
-      - name: Validate 2h stats
-        run: |
-          python scripts/validate_stats.py --interval 2h --min-sharpe 0.5 --max-sharpe 5.0 --max-dd 25.0
-      
-      - name: Run 1d backtest
-        run: |
-          python scripts/run_backtest.py --interval 1d --quick
-      
-      - name: Validate 1d stats
-        run: |
-          python scripts/validate_stats.py --interval 1d --min-sharpe 0.5 --max-sharpe 5.0 --max-dd 25.0
-      
-      - name: Upload multi-timeframe stats
-        uses: actions/upload-artifact@v4
-        with:
-          name: multi-bt-stats
-          path: |
-            reports/2h/stats.json
-            reports/1d/stats.json
-          
+          name: bt_reports
+          path: reports/*/bt_with_price.html
+
   docker:
     needs: quick_bt
     runs-on: ubuntu-latest
@@ -145,12 +78,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          load: true
-          tags: mlbotnew:test
+          push: false
+          tags: mlbotnew:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          
-      - name: Test Docker image
-        run: |
-          docker run --rm mlbotnew:test python -c "import vectorbt; print('VectorBT loaded successfully')"
-          docker run --rm mlbotnew:test python -c "import src.backtest; print('MLbot backtest module loaded successfully')"

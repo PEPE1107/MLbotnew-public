@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """
-live_signal.py - リアルタイムシグナル生成モジュール
+live_signal.py - 2時間足Coinglassデータによるリアルタイムシグナル生成モジュール
 
 機能:
 - FastAPI + asyncio による常駐 microservice 
-- Coinglass API からリアルタイムデータ取得
-- 訓練済みモデルによる予測
+- Coinglass API から2時間足のリアルタイムデータ取得（全7種のデータソース）
+- 訓練済みモデルによる予測（2時間足データのみを使用）
 - S3 / ファイルへのシグナル出力
 - Prometheus メトリクスの提供
 """
@@ -149,18 +149,14 @@ class LiveSignalGenerator:
             raise
     
     def _load_intervals(self) -> List[str]:
-        """時間枠設定を読み込む
+        """時間枠設定を読み込む - 2h固定
         
         Returns:
-            List[str]: 時間枠リスト
+            List[str]: 2h固定の時間枠リスト
         """
-        try:
-            with open(self.config_dir / 'intervals.yaml', 'r') as f:
-                config = yaml.safe_load(f)
-            return config['intervals']
-        except Exception as e:
-            logger.error(f"時間枠設定の読み込みに失敗しました: {e}")
-            raise
+        # 設定ファイルからの読み込みは行わず、2hのみを返す
+        logger.info("2時間足固定モードで動作します")
+        return ["2h"]
             
     def _load_mtf_config(self) -> Dict:
         """MTF設定を読み込む

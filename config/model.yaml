@@ -1,93 +1,186 @@
 # MLbotnew モデル設定
-# 機械学習モデルのパラメータと設定
+# Coinglassデータを使った2時間足戦略
 
-# モデルバージョン管理
-model_version: "2025.05.09"  # モデルバージョン
-production_model: "mlbotnew_v1"  # 本番運用モデル名
-
-# マルチタイムフレーム二段モデル
+# モデル定義
 models:
-  # 方向予測モデル (classification)
-  direction:
+  # 方向判定（分類）モデル
+  classifier:
     type: "LightGBM"
     params:
       objective: "binary"
       metric: "auc"
-      boosting: "gbdt"
-      num_leaves: 32
+      boosting_type: "gbdt"
+      n_estimators: 250
       learning_rate: 0.05
-      feature_fraction: 0.8
-      bagging_fraction: 0.8
+      max_depth: 6
+      num_leaves: 40
+      min_data_in_leaf: 30
+      feature_fraction: 0.85
+      bagging_fraction: 0.85
       bagging_freq: 5
       verbose: -1
-    # トレーニング設定
-    training:
-      test_size: 0.3
-      val_size: 0.2
-      cv_folds: 5
-      early_stopping_rounds: 30
-      target_col: "direction"  # 0/1のバイナリ方向
-    # 特徴量設定
-    features:
-      - "trend_flag"  # 日足のトレンドフラグ
-      - "funding_rate"
-      - "oi_change"
-      - "liquidation"
-      - "long_short_ratio"
-      - "premium_index"
-      - "rsi_14"
-      - "sma_ratio_20_50"
-      - "ema_ratio_12_26"
-      - "atr_14"
-      - "bb_width_20"
-      - "volume_change"
-  
-  # リターン予測モデル (regression)
-  returns:
+      random_state: 42
+    
+  # 期待値予測（回帰）モデル
+  regressor:
     type: "CatBoost"
     params:
       loss_function: "RMSE"
-      eval_metric: "RMSE"
-      iterations: 1000
+      iterations: 350
       learning_rate: 0.03
-      depth: 6
-      random_strength: 1.0
+      depth: 7
+      l2_leaf_reg: 3
+      random_strength: 1
+      random_seed: 42
+      eval_metric: "RMSE"
       verbose: False
-    # トレーニング設定
-    training:
-      test_size: 0.3
-      val_size: 0.2
-      cv_folds: 5
-      early_stopping_rounds: 50
-      target_col: "future_return_5"  # 5期間先のリターン
-    # 特徴量設定（方向モデルと同じ特徴量セット）
-    features:
-      - "trend_flag"
-      - "funding_rate"
-      - "oi_change"
-      - "liquidation"
-      - "long_short_ratio"
-      - "premium_index"
-      - "rsi_14"
-      - "sma_ratio_20_50"
-      - "ema_ratio_12_26"
-      - "atr_14"
-      - "bb_width_20"
-      - "volume_change"
 
-# ハイパーパラメータチューニング設定
-tuning:
-  n_trials: 50
-  cv_folds: 3
-  timeout: 3600  # 1時間
-  direction: "maximize"
-  metric: "sharpe_ratio"  # バックテストシャープレシオでチューニング
+# 特徴量設定
+features:
+  # 価格ベース特徴量
+  price:
+    - "open"
+    - "high"
+    - "low"
+    - "close"
+    - "volume"
+    # テクニカル指標
+    - "returns_1"       # 1期間リターン
+    - "returns_5"       # 5期間リターン
+    - "returns_10"      # 10期間リターン
+    - "sma_10"          # 10期間単純移動平均
+    - "sma_20"          # 20期間単純移動平均
+    - "sma_50"          # 50期間単純移動平均
+    - "sma_200"         # 200期間単純移動平均
+    - "ema_10"          # 10期間指数移動平均
+    - "ema_20"          # 20期間指数移動平均
+    - "ema_50"          # 50期間指数移動平均
+    - "ema_200"         # 200期間指数移動平均
+    - "rsi_14"          # 14期間RSI
+    - "macd"            # MACD
+    - "macd_signal"     # MACDシグナル
+    - "macd_hist"       # MACDヒストグラム
+    - "slowk"           # ストキャスティクスK
+    - "slowd"           # ストキャスティクスD
+    - "bb_upper"        # ボリンジャーバンド上限
+    - "bb_middle"       # ボリンジャーバンド中央
+    - "bb_lower"        # ボリンジャーバンド下限
+    - "bb_width"        # ボリンジャーバンド幅
+    - "bb_pos"          # ボリンジャーバンド内の価格位置
+    - "atr_14"          # 14期間ATR
+    - "volatility_10"   # 10期間ボラティリティ
+    - "volatility_20"   # 20期間ボラティリティ
+    - "close_in_range"  # レンジ内の終値位置
+    - "trend_flag"      # トレンドフラグ
+  
+  # ファンディングレート特徴量
+  funding:
+    - "funding_open"         # ファンディングレート始値
+    - "funding_high"         # ファンディングレート高値
+    - "funding_low"          # ファンディングレート安値
+    - "funding_close"        # ファンディングレート終値
+    - "funding_rate_change"  # ファンディングレート変化率
+    - "funding_rate_ma7"     # ファンディングレート7期間移動平均
+    - "funding_rate_dev"     # ファンディングレート偏差
+    - "funding_rate_abs"     # ファンディングレート絶対値
+    - "funding_rate_sign"    # ファンディングレート符号
+    - "funding_streak"       # ファンディングレート符号継続期間
+  
+  # オープンインタレスト特徴量
+  oi:
+    - "oi_open"              # OI始値
+    - "oi_high"              # OI高値
+    - "oi_low"               # OI安値
+    - "oi_close"             # OI終値
+    - "oi_change"            # OI変化率
+    - "oi_ma7"               # OI7期間移動平均
+    - "oi_rel_position"      # OI相対位置
+    - "oi_acceleration"      # OI加速度
+    - "oi_volatility"        # OIボラティリティ
+  
+  # 清算データ特徴量
+  liquidation:
+    - "long_liquidation"     # ロング清算量
+    - "short_liquidation"    # ショート清算量
+    - "total_liquidation"    # 総清算量
+    - "liquidation_ratio"    # 清算比率(ロング/ショート)
+    - "liquidation_ma7"      # 清算7期間移動平均
+    - "liquidation_volatility" # 清算ボラティリティ
+    - "liquidation_zscore"   # 清算Z値
+    - "liquidation_signal"   # 清算シグナル
+  
+  # ロングショート比率特徴量
+  lsr:
+    - "long_account"         # ロングアカウント比率
+    - "short_account"        # ショートアカウント比率
+    - "long_short_ratio"     # ロングショート比率
+    - "lsr_ma7"              # LSR7期間移動平均
+    - "lsr_dev"              # LSR偏差
+    - "lsr_volatility"       # LSRボラティリティ
+    - "lsr_zscore"           # LSRZ値
+    - "lsr_extreme"          # LSR極値フラグ
+    - "lsr_direction"        # LSR方向
+  
+  # Takerバイ/セル特徴量
+  taker:
+    - "taker_buy_volume"     # Takerバイボリューム
+    - "taker_sell_volume"    # Takerセルボリューム
+    - "taker_buy_sell_ratio" # Takerバイ/セル比率
+    - "taker_buy_sell_diff"  # Takerバイ-セル差分
+    - "taker_ratio_ma7"      # 比率7期間移動平均
+    - "taker_diff_ma7"       # 差分7期間移動平均
+    - "taker_buy_pressure"   # バイ圧力(-1〜1)
+  
+  # オーダーブック特徴量
+  orderbook:
+    - "bids_usd"             # 買い注文量(USD)
+    - "bids_amount"          # 買い注文量(BTC)
+    - "asks_usd"             # 売り注文量(USD)
+    - "asks_amount"          # 売り注文量(BTC)
+    - "bid_ask_ratio"        # 買い/売り比率
+  
+  # プレミアム指数特徴量
+  premium:
+    - "premium_usd"          # プレミアム(USD)
+    - "premium_rate"         # プレミアム率
+    - "premium_ma7"          # プレミアム7期間移動平均
+    - "premium_dev"          # プレミアム偏差
+    - "premium_volatility"   # プレミアムボラティリティ
+    - "premium_zscore"       # プレミアムZ値
+    - "premium_extreme"      # プレミアム極値フラグ
+  
+  # 複合特徴量
+  composite:
+    - "funding_lsr_correlation" # ファンディングとLSRの相関
+    - "funding_lsr_agreement"   # ファンディングとLSRの一致度
+    - "liquidation_vol_ratio"   # 清算/ボラティリティ比率
+    - "demand_supply_indicator" # 需給指標
+    - "demand_supply_strength"  # 需給強度
 
-# ポジションサイジング
-position_sizing:
-  method: "risk_parity"  # リスクパリティに基づくポジションサイズ計算
-  formula: "beta = proba * mu / var95"  # ポジションサイズβの計算式
-  max_position: 1.0  # 最大ポジションサイズ（1 = 100%）
-  var_window: 20     # VaR計算ウィンドウサイズ
-  var_percentile: 95 # VaRパーセンタイル
-  min_proba: 0.55    # エントリーの最小確率閾値
+# トレーニング設定
+training:
+  # 学習データ分割
+  train_test_split:
+    train_period: 10         # トレーニングに使用する月数
+    test_period: 2           # テストに使用する月数
+    slide_period: 1          # スライド月数
+  
+  # ラベル生成
+  label:
+    lookahead: 1             # 先読み期間
+    threshold: 0.004         # 閾値 (±0.4%)
+
+# リスク管理
+risk:
+  leverage: 1.5              # レバレッジ倍率
+  max_position_size: 0.90    # 最大ポジションサイズ（資金の割合）
+  position_sizing:           # ポジションサイズ調整
+    method: "var"            # VaR方式
+    var_confidence: 0.95     # 95%信頼区間
+    var_lookback: 30         # VaR計算期間
+  
+  # リスクガードレール
+  guardrails:
+    max_daily_loss: 0.04     # 最大日次損失 (-4%)
+    var_limit: 0.015         # VaR限度 (1.5%)
+    max_drawdown: 0.20       # 最大ドローダウン限度 (20%)

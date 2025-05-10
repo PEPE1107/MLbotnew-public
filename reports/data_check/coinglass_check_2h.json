@@ -1,0 +1,144 @@
+{
+  "interval": "2h",
+  "expected_days": 360,
+  "coverage": {
+    "price": {
+      "start_date": "2024-05-13",
+      "end_date": "2025-05-08",
+      "days_coverage": 359,
+      "records": 4320,
+      "coverage_ratio": 99.7,
+      "records_ratio": 100.0,
+      "status": "OK"
+    },
+    "oi": {
+      "start_date": "2024-05-13",
+      "end_date": "2025-05-08",
+      "days_coverage": 359,
+      "records": 4320,
+      "coverage_ratio": 99.7,
+      "records_ratio": 100.0,
+      "status": "OK"
+    },
+    "funding": {
+      "start_date": "2024-05-13",
+      "end_date": "2025-05-08",
+      "days_coverage": 359,
+      "records": 4320,
+      "coverage_ratio": 99.7,
+      "records_ratio": 100.0,
+      "status": "OK"
+    },
+    "liq": {
+      "start_date": "2024-05-13",
+      "end_date": "2025-05-08",
+      "days_coverage": 359,
+      "records": 4320,
+      "coverage_ratio": 99.7,
+      "records_ratio": 100.0,
+      "status": "OK"
+    },
+    "lsr": {
+      "start_date": "2024-05-13",
+      "end_date": "2025-05-08",
+      "days_coverage": 359,
+      "records": 4320,
+      "coverage_ratio": 99.7,
+      "records_ratio": 100.0,
+      "status": "OK"
+    },
+    "taker": {
+      "start_date": "2024-05-13",
+      "end_date": "2025-05-08",
+      "days_coverage": 359,
+      "records": 4320,
+      "coverage_ratio": 99.7,
+      "records_ratio": 100.0,
+      "status": "OK"
+    },
+    "orderbook": {
+      "start_date": "2024-11-09",
+      "end_date": "2025-05-08",
+      "days_coverage": 179,
+      "records": 2160,
+      "coverage_ratio": 49.7,
+      "records_ratio": 50.0,
+      "status": "WARNING"
+    },
+    "premium": {
+      "start_date": "2024-05-13",
+      "end_date": "2025-05-08",
+      "days_coverage": 359,
+      "records": 4320,
+      "coverage_ratio": 99.7,
+      "records_ratio": 100.0,
+      "status": "OK"
+    }
+  },
+  "quality": {
+    "price": {
+      "records": 4320,
+      "null_ratio": 0.0,
+      "duplicate_ratio": 0.0,
+      "continuity_score": 100.0,
+      "gaps_count": 0,
+      "status": "OK"
+    },
+    "oi": {
+      "records": 4320,
+      "null_ratio": 0.0,
+      "duplicate_ratio": 0.0,
+      "continuity_score": 100.0,
+      "gaps_count": 0,
+      "status": "OK"
+    },
+    "funding": {
+      "records": 4320,
+      "null_ratio": 0.0,
+      "duplicate_ratio": 0.0,
+      "continuity_score": 100.0,
+      "gaps_count": 0,
+      "status": "OK"
+    },
+    "liq": {
+      "records": 4320,
+      "null_ratio": 0.0,
+      "duplicate_ratio": 0.0,
+      "continuity_score": 100.0,
+      "gaps_count": 0,
+      "status": "OK"
+    },
+    "lsr": {
+      "records": 4320,
+      "null_ratio": 0.0,
+      "duplicate_ratio": 0.0,
+      "continuity_score": 100.0,
+      "gaps_count": 0,
+      "status": "OK"
+    },
+    "taker": {
+      "records": 4320,
+      "null_ratio": 0.0,
+      "duplicate_ratio": 0.0,
+      "continuity_score": 100.0,
+      "gaps_count": 0,
+      "status": "OK"
+    },
+    "orderbook": {
+      "records": 2160,
+      "null_ratio": 0.0,
+      "duplicate_ratio": 0.0,
+      "continuity_score": 100.0,
+      "gaps_count": 0,
+      "status": "OK"
+    },
+    "premium": {
+      "records": 4320,
+      "null_ratio": 0.0,
+      "duplicate_ratio": 0.0,
+      "continuity_score": 100.0,
+      "gaps_count": 0,
+      "status": "OK"
+    }
+  }
+}

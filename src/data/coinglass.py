@@ -74,12 +74,14 @@ class CoinglassClient:
             List[str]: List of timeframes
         """
         try:
-            with open(self.config_dir / 'intervals.yaml', 'r') as f:
+            with open(self.config_dir / 'intervals.yaml', 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
-            return config['intervals']
+            # Look for backtest_intervals key, fallback to ['2h']
+            return config.get('backtest_intervals', ['2h'])
         except Exception as e:
             logger.error(f"Failed to load interval configuration: {e}")
-            raise
+            # Return default value in case of error
+            return ['2h']
     
     def _setup_slack_client(self) -> Optional[slack_sdk.WebhookClient]:
         """Set up Slack client

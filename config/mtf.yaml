@@ -1,52 +1,107 @@
-# MLbotnew マルチタイムフレーム設定
-# 各タイムフレーム間のデータ転送および連携ルール
+# MLbotnew 単一時間枠設定 (2h)
+# Coinglassデータを使った2時間足専用の設定
 
-# 主要時間枠定義（intervals.yaml と同期）
-timeframes:
-  trend: 1d    # トレンド判断（日足）
-  supply: 2h   # 需給指標（2時間足）
-  entry: 15m   # エントリー判断（15分足）
+# トレード戦略設定
+strategy:
+  # 2時間足（メイン時間枠）
+  main:
+    interval: 2h
+    role: trading
+    features:
+      # 価格関連特徴量
+      - trend_flag            # EMA200 トレンドフラグ
+      - sma_10                # 10期間単純移動平均
+      - sma_20                # 20期間単純移動平均
+      - sma_50                # 50期間単純移動平均
+      - ema_10                # 10期間指数移動平均
+      - ema_20                # 20期間指数移動平均
+      - ema_50                # 50期間指数移動平均
+      - rsi_14                # 14期間RSI
+      - macd                  # MACD
+      - macd_signal           # MACDシグナル
+      - macd_hist             # MACDヒストグラム
+      - bb_width              # ボリンジャーバンド幅
+      - volatility_10         # 10期間ボラティリティ
+      - volatility_20         # 20期間ボラティリティ
+      
+      # ファンディングレート特徴量
+      - funding_close         # ファンディングレート終値
+      - funding_rate_ma7      # ファンディングレート7期間移動平均
+      - funding_rate_dev      # ファンディングレート偏差
+      - funding_rate_sign     # ファンディングレート符号
+      
+      # オープンインタレスト特徴量
+      - oi_close              # OI終値
+      - oi_change             # OI変化率
+      - oi_rel_position       # OI相対位置
+      
+      # 清算データ特徴量
+      - total_liquidation     # 総清算量
+      - liquidation_ratio     # 清算比率(ロング/ショート)
+      - liquidation_ma7       # 清算7期間移動平均
+      - liquidation_zscore    # 清算Z値
+      
+      # ロングショート比率特徴量
+      - long_short_ratio      # ロングショート比率
+      - lsr_ma7               # LSR7期間移動平均
+      - lsr_dev               # LSR偏差
+      - lsr_direction         # LSR方向
+      
+      # Takerバイ/セル特徴量
+      - taker_buy_sell_ratio  # Takerバイ/セル比率
+      - taker_buy_pressure    # バイ圧力(-1〜1)
+      
+      # オーダーブック特徴量
+      - bid_ask_ratio         # 買い/売り比率
+      
+      # プレミアム指数特徴量
+      - premium_rate          # プレミアム率
+      - premium_dev           # プレミアム偏差
+      
+      # 複合特徴量
+      - funding_lsr_correlation  # ファンディングとLSRの相関
+      - demand_supply_indicator  # 需給指標
+      - demand_supply_strength   # 需給強度
+    shift: 1                  # 1期間先行させる（未来情報漏洩防止）
 
-# 時間枠間のデータ転送ルール
-transfers:
-  # 日足 → 15分足へのデータ転送
-  trend_to_entry:
-    source: 1d
-    target: 15m
-    columns:
-      - name: trend_flag
-        transform: shift(1)  # 前日分を参照
-        fill_method: ffill   # 前方埋め
+# モデルパイプライン設定
+model_pipeline:
+  # ①LightGBM方向判定モデル
+  classifier:
+    features_groups:
+      - price                # 価格関連特徴量グループ
+      - funding              # ファンディングレート特徴量グループ
+      - oi                   # オープンインタレスト特徴量グループ
+      - liquidation          # 清算データ特徴量グループ
+      - lsr                  # ロングショート比率特徴量グループ
+      - taker                # Takerバイ/セル特徴量グループ
+      - orderbook            # オーダーブック特徴量グループ
+      - premium              # プレミアム指数特徴量グループ
+      - composite            # 複合特徴量グループ
+    output: direction        # 0/1（売り/買い）
     
-  # 2時間足 → 15分足へのデータ転送
-  supply_to_entry:
-    source: 2h
-    target: 15m
-    columns:
-      - name: funding_rate
-        transform: shift(1)  # 前の時間帯を参照
-        fill_method: ffill
-      - name: oi_change
-        transform: shift(1)
-        fill_method: ffill
-      - name: liquidation
-        transform: shift(1)
-        fill_method: ffill
-      - name: long_short_ratio
-        transform: shift(1)
-        fill_method: ffill
-      - name: premium_index
-        transform: shift(1)
-        fill_method: ffill
-
-# 各時間枠の役割と処理順序
-processing_order:
-  1: trend   # 最初に日足トレンド判断
-  2: supply  # 次に2時間足需給計算
-  3: entry   # 最後に15分足エントリー判断
-
-# シフト操作の検証設定
-validation:
-  check_future_leak: true    # 未来データ漏洩チェック
-  audit_shift_operations: true   # shift操作の監査
-  verify_resampling: true    # リサンプリング検証
+  # ②CatBoost期待値予測モデル
+  regressor:
+    features:
+      - direction            # 分類器の出力
+      - trend_flag           # トレンドフラグ
+      - funding_close        # ファンディングレート
+      - funding_rate_sign    # ファンディングレート符号
+      - oi_change            # OI変化率
+      - total_liquidation    # 総清算量
+      - liquidation_ratio    # 清算比率
+      - long_short_ratio     # ロングショート比率
+      - lsr_direction        # LSR方向
+      - taker_buy_sell_ratio # Takerバイ/セル比率
+      - bid_ask_ratio        # 買い/売り比率
+      - premium_rate         # プレミアム率
+      - demand_supply_indicator # 需給指標
+      - rsi_14               # RSI
+      - volatility_20        # ボラティリティ
+      - bb_width             # ボリンジャーバンド幅
+    output: mu               # 期待リターン
+    
+  # 最終的なポジションサイズ計算
+  position_sizing:
+    formula: "direction_proba * mu / var95"  # ポジションサイズの計算式
+    bounds: [-1.0, 1.0]                      # ポジションサイズの上下限

@@ -1,4 +1,27 @@
-*.parquet filter=lfs diff=lfs merge=lfs -text
+# MLbotnew Git LFS 設定
+# 大きなファイルはLFSで管理
+
+# モデルファイル
 *.pkl filter=lfs diff=lfs merge=lfs -text
-*.pt filter=lfs diff=lfs merge=lfs -text
-models/**/*.txt filter=lfs diff=lfs merge=lfs -text
+*.h5 filter=lfs diff=lfs merge=lfs -text
+*.model filter=lfs diff=lfs merge=lfs -text
+
+# データファイル
+*.parquet filter=lfs diff=lfs merge=lfs -text
+*.csv filter=lfs diff=lfs merge=lfs -text
+*.feather filter=lfs diff=lfs merge=lfs -text
+
+# レポートファイル（HTMLのみ）
+*.html filter=lfs diff=lfs merge=lfs -text
+
+# JSONは通常のGitで管理 (stats.jsonなど)
+# *.json
+
+# 画像ファイル
+*.png filter=lfs diff=lfs merge=lfs -text
+*.jpg filter=lfs diff=lfs merge=lfs -text
+*.jpeg filter=lfs diff=lfs merge=lfs -text
+
+# アーカイブ (必要な場合)
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.tar.gz filter=lfs diff=lfs merge=lfs -text
